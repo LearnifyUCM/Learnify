@@ -1,25 +1,25 @@
 import { useState } from "react";
 import { useLocation } from "react-router-dom"; 
-// 🚨 NEW IMPORTS
+// CRITICAL: Import the new interactive components
 import FlashcardSession from "../components/FlashcardSession";
 import QuizSession from "../components/QuizSession";
 
 function Dashboard() {
-  // CRASH FIX & DATA RETRIEVAL
+  // --- CRASH FIX & DATA RETRIEVAL ---
   const location = useLocation();
   const uploadedMaterial = location.state?.studyMaterial;
   const sessionName = location.state?.sessionName || "Study Dashboard";
   const hasNewMaterial = uploadedMaterial && uploadedMaterial.flashcards && uploadedMaterial.quiz;
-  // -------------------------
-
-  // 🚨 NEW STATE: Controls whether we show the overview or the session
+  
+  // NEW STATE: Controls whether we show the overview/dashboard or the active session
   const [currentMode, setCurrentMode] = useState('overview'); 
+  // ------------------------------------
 
   const [studySessionName, setStudySessionName] = useState("");
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [dragActive, setDragActive] = useState(false);
-  
+
   // --- Original Functions (Preserved) ---
   const handleCreateSession = () => {
     setShowCreateModal(true);
@@ -72,7 +72,7 @@ function Dashboard() {
   // ----------------------------------------
   
   
-  // --- NEW: RENDER LOGIC FOR DIFFERENT MODES ---
+  // --- NEW: RENDER LOGIC FOR DIFFERENT MODES (OVERVIEW, FLASHCARDS, QUIZ) ---
   const renderGeneratedMaterial = () => {
       if (!uploadedMaterial) return null;
 
@@ -108,7 +108,7 @@ function Dashboard() {
       return (
           <div className="space-y-8 mb-12">
               <h2 className="text-3xl font-bold text-cyan-400 text-center">
-                  Study Actions
+                  Study Actions for "{sessionName.replace('.pdf', '')}"
               </h2>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -147,6 +147,7 @@ function Dashboard() {
       <div className="relative z-10 w-full px-6 lg:px-12 py-8">
         <div className="max-w-6xl mx-auto">
           <h1 className="text-4xl font-bold mb-8 text-white text-center">
+            {/* Display Interactive Session title when active, otherwise the generic title */}
             {currentMode === 'overview' ? (hasNewMaterial ? `Material: ${sessionName.replace('.pdf', '')}` : 'Study Dashboard') : 'Interactive Session'}
           </h1>
           
@@ -154,7 +155,7 @@ function Dashboard() {
           {/* RENDER DYNAMIC CONTENT */}
           {hasNewMaterial && renderGeneratedMaterial()}
           
-          {/* Only show old dashboard content if we are in overview and have no new material */}
+          {/* Only show old dashboard content if we are in overview and have no new material to focus on */}
           {currentMode === 'overview' && !hasNewMaterial && (
             <>
               {/* Quick Actions Bar */}
@@ -181,7 +182,7 @@ function Dashboard() {
                   Your Study Sessions
                 </h2>
                 
-                {/* Study Sessions Grid */}
+                {/* Study Sessions Grid (Original Content) */}
                 <div className="space-y-4">
                   <div className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-4 hover:bg-opacity-70 transition-all">
                     <h3 className="font-semibold text-white mb-2">Biology Chapter 12</h3>
