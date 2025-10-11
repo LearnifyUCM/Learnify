@@ -1,6 +1,6 @@
 import React, { useState, useRef } from "react";
-import openFolder from './assets/open-folder.png'
-import xIcon from './assets/x.png'
+import openFolder from '../assets/open-folder.png'
+import xIcon from '../assets/x.png'
 
 const FileUpload: React.FC = () => {
     const [file, setFile] = useState<File | null>(null);
