@@ -1,11 +1,26 @@
 import { useState } from "react";
+import { useLocation } from "react-router-dom"; 
+// 🚨 NEW IMPORTS
+import FlashcardSession from "../components/FlashcardSession";
+import QuizSession from "../components/QuizSession";
 
 function Dashboard() {
+  // CRASH FIX & DATA RETRIEVAL
+  const location = useLocation();
+  const uploadedMaterial = location.state?.studyMaterial;
+  const sessionName = location.state?.sessionName || "Study Dashboard";
+  const hasNewMaterial = uploadedMaterial && uploadedMaterial.flashcards && uploadedMaterial.quiz;
+  // -------------------------
+
+  // 🚨 NEW STATE: Controls whether we show the overview or the session
+  const [currentMode, setCurrentMode] = useState('overview'); 
+
   const [studySessionName, setStudySessionName] = useState("");
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [dragActive, setDragActive] = useState(false);
-
+  
+  // --- Original Functions (Preserved) ---
   const handleCreateSession = () => {
     setShowCreateModal(true);
   };
@@ -15,7 +30,7 @@ function Dashboard() {
     setStudySessionName("");
     setSelectedFiles([]);
   };
-
+  
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const newFiles = Array.from(e.target.files);
@@ -50,140 +65,165 @@ function Dashboard() {
 
   const handleSubmit = () => {
     if (studySessionName.trim() && selectedFiles.length > 0) {
-      // Here you would typically upload the files and create the session
       console.log("Creating session:", studySessionName, "with files:", selectedFiles);
       closeModal();
     }
   };
+  // ----------------------------------------
+  
+  
+  // --- NEW: RENDER LOGIC FOR DIFFERENT MODES ---
+  const renderGeneratedMaterial = () => {
+      if (!uploadedMaterial) return null;
+
+      // Check for backend error (like extraction failure)
+      if (uploadedMaterial.error) {
+          return (
+              <div className="bg-red-900 bg-opacity-50 backdrop-blur-lg rounded-2xl p-6 border border-red-700 mb-12">
+                  <h3 className="text-xl font-semibold text-white">Extraction Failed!</h3>
+                  <p className="text-sm text-red-300 mt-2">
+                      Error: {uploadedMaterial.error}. Please try a clean, machine-readable PDF.
+                  </p>
+              </div>
+          );
+      }
+
+      const { flashcards, quiz } = uploadedMaterial;
+
+      // 🚨 RENDER INTERACTIVE SESSION
+      if (currentMode === 'flashcards') {
+          return <FlashcardSession 
+                     flashcards={flashcards} 
+                     onExit={() => setCurrentMode('overview')}
+                 />;
+      }
+      if (currentMode === 'quiz') {
+          return <QuizSession 
+                     quiz={quiz} 
+                     onExit={() => setCurrentMode('overview')}
+                 />;
+      }
+
+      // Default: Overview Mode (Initial view after successful upload)
+      return (
+          <div className="space-y-8 mb-12">
+              <h2 className="text-3xl font-bold text-cyan-400 text-center">
+                  Study Actions
+              </h2>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  {/* Flashcards Overview Block */}
+                  <div className="bg-gray-800 bg-opacity-70 rounded-2xl p-6 border border-gray-700">
+                      <h3 className="text-2xl font-semibold mb-4 text-white">Flashcards ({flashcards.length})</h3>
+                      <p className="text-gray-300 mb-6">Review key terms and definitions.</p>
+                      <button 
+                          onClick={() => setCurrentMode('flashcards')} // <-- SET MODE
+                          className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-medium transition-colors"
+                      >
+                          Start Flashcard Session
+                      </button>
+                  </div>
+
+                  {/* Quiz Overview Block */}
+                  <div className="bg-gray-800 bg-opacity-70 rounded-2xl p-6 border border-gray-700">
+                      <h3 className="text-2xl font-semibold mb-4 text-white">Quiz ({quiz.length})</h3>
+                      <p className="text-gray-300 mb-6">Test your knowledge with multiple-choice questions.</p>
+                      <button 
+                          onClick={() => setCurrentMode('quiz')} // <-- SET MODE
+                          className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg font-medium transition-colors"
+                      >
+                          Take Quiz Session
+                      </button>
+                  </div>
+              </div>
+          </div>
+      );
+  };
+  // -----------------------------------------------------
+
+  
   return (
     <div className="min-h-screen w-full relative">
       <div className="relative z-10 w-full px-6 lg:px-12 py-8">
         <div className="max-w-6xl mx-auto">
           <h1 className="text-4xl font-bold mb-8 text-white text-center">
-            Study Dashboard
+            {currentMode === 'overview' ? (hasNewMaterial ? `Material: ${sessionName.replace('.pdf', '')}` : 'Study Dashboard') : 'Interactive Session'}
           </h1>
           
-          {/* Quick Actions Bar */}
-          <div className="mb-12 bg-gray-800 bg-opacity-50 backdrop-blur-lg rounded-2xl p-6 border border-gray-700">
-            <h3 className="text-xl font-semibold mb-4 text-white flex items-center gap-2">
-              Quick Actions
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <button className="w-full bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-3 rounded-xl transition-colors flex items-center justify-center gap-2 font-medium">
-                Upload New PDF
-              </button>
-              <button className="w-full bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-3 rounded-xl transition-colors flex items-center justify-center gap-2 font-medium">
-                Start Study Session
-              </button>
-              <button className="w-full bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-3 rounded-xl transition-colors flex items-center justify-center gap-2 font-medium">
-                View Analytics
-              </button>
-            </div>
-          </div>
+          
+          {/* RENDER DYNAMIC CONTENT */}
+          {hasNewMaterial && renderGeneratedMaterial()}
+          
+          {/* Only show old dashboard content if we are in overview and have no new material */}
+          {currentMode === 'overview' && !hasNewMaterial && (
+            <>
+              {/* Quick Actions Bar */}
+              <div className="mb-12 bg-gray-800 bg-opacity-50 backdrop-blur-lg rounded-2xl p-6 border border-gray-700">
+                <h3 className="text-xl font-semibold mb-4 text-white flex items-center gap-2">
+                  Quick Actions
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <button className="w-full bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-3 rounded-xl transition-colors flex items-center justify-center gap-2 font-medium">
+                    Upload New PDF
+                  </button>
+                  <button className="w-full bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-3 rounded-xl transition-colors flex items-center justify-center gap-2 font-medium">
+                    Start Study Session
+                  </button>
+                  <button className="w-full bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-3 rounded-xl transition-colors flex items-center justify-center gap-2 font-medium">
+                    View Analytics
+                  </button>
+                </div>
+              </div>
 
-          {/* Study Sessions */}
-          <div className="bg-gray-800 bg-opacity-50 backdrop-blur-lg rounded-2xl p-6 border border-gray-700">
-            <h2 className="text-2xl font-semibold mb-6 text-white">
-              Your Study Sessions
-            </h2>
-            
-            {/* Study Sessions Grid */}
-            <div className="space-y-4">
-              <div className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-4 hover:bg-opacity-70 transition-all">
-                <h3 className="font-semibold text-white mb-2">Biology Chapter 12</h3>
-                <p className="text-sm text-gray-300 mb-3">Created 2 hours ago</p>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs bg-green-500 text-white px-3 py-1 rounded-full">45 flashcards</span>
-                  <button className="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-                    Study Now
-                  </button>
+              {/* Study Sessions */}
+              <div className="bg-gray-800 bg-opacity-50 backdrop-blur-lg rounded-2xl p-6 border border-gray-700">
+                <h2 className="text-2xl font-semibold mb-6 text-white">
+                  Your Study Sessions
+                </h2>
+                
+                {/* Study Sessions Grid */}
+                <div className="space-y-4">
+                  <div className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-4 hover:bg-opacity-70 transition-all">
+                    <h3 className="font-semibold text-white mb-2">Biology Chapter 12</h3>
+                    <p className="text-sm text-gray-300 mb-3">Created 2 hours ago</p>
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs bg-green-500 text-white px-3 py-1 rounded-full">45 flashcards</span>
+                      <button className="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+                        Study Now
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-4 hover:bg-opacity-70 transition-all">
+                    <h3 className="font-semibold text-white mb-2">Physics Formulas</h3>
+                    <p className="text-sm text-gray-300 mb-3">Created 1 day ago</p>
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs bg-blue-500 text-white px-3 py-1 rounded-full">23 flashcards</span>
+                      <button className="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+                        Study Now
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div 
+                    onClick={handleCreateSession}
+                    className="border-2 border-dashed border-gray-500 rounded-xl p-6 flex flex-col items-center justify-center hover:border-cyan-400 transition-colors cursor-pointer"
+                  >
+                    <div className="text-gray-400 mb-2">
+                      <svg className="w-8 h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                      </svg>
+                    </div>
+                    <span className="text-gray-300 text-sm font-medium">Create New Session</span>
+                  </div>
                 </div>
               </div>
-              
-              <div className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-4 hover:bg-opacity-70 transition-all">
-                <h3 className="font-semibold text-white mb-2">Physics Formulas</h3>
-                <p className="text-sm text-gray-300 mb-3">Created 1 day ago</p>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs bg-blue-500 text-white px-3 py-1 rounded-full">23 flashcards</span>
-                  <button className="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-                    Study Now
-                  </button>
-                </div>
-              </div>
-              
-              <div className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-4 hover:bg-opacity-70 transition-all">
-                <h3 className="font-semibold text-white mb-2">History Notes</h3>
-                <p className="text-sm text-gray-300 mb-3">Created 3 days ago</p>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs bg-purple-500 text-white px-3 py-1 rounded-full">67 flashcards</span>
-                  <button className="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-                    Study Now
-                  </button>
-                </div>
-              </div>
-              
-              <div className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-4 hover:bg-opacity-70 transition-all">
-                <h3 className="font-semibold text-white mb-2">Math Equations</h3>
-                <p className="text-sm text-gray-300 mb-3">Created 5 days ago</p>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs bg-orange-500 text-white px-3 py-1 rounded-full">34 flashcards</span>
-                  <button className="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-                    Study Now
-                  </button>
-                </div>
-              </div>
-              
-              <div className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-4 hover:bg-opacity-70 transition-all">
-                <h3 className="font-semibold text-white mb-2">Chemistry Basics</h3>
-                <p className="text-sm text-gray-300 mb-3">Created 1 week ago</p>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs bg-red-500 text-white px-3 py-1 rounded-full">52 flashcards</span>
-                  <button className="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-                    Study Now
-                  </button>
-                </div>
-              </div>
-              
-              <div className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-4 hover:bg-opacity-70 transition-all">
-                <h3 className="font-semibold text-white mb-2">Spanish Vocabulary</h3>
-                <p className="text-sm text-gray-300 mb-3">Created 1 week ago</p>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs bg-yellow-500 text-white px-3 py-1 rounded-full">89 flashcards</span>
-                  <button className="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-                    Study Now
-                  </button>
-                </div>
-              </div>
-              
-              <div className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-4 hover:bg-opacity-70 transition-all">
-                <h3 className="font-semibold text-white mb-2">Computer Science Fundamentals</h3>
-                <p className="text-sm text-gray-300 mb-3">Created 2 weeks ago</p>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs bg-indigo-500 text-white px-3 py-1 rounded-full">76 flashcards</span>
-                  <button className="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-                    Study Now
-                  </button>
-                </div>
-              </div>
-              
-              {/* Add New Session Card */}
-              <div 
-                onClick={handleCreateSession}
-                className="border-2 border-dashed border-gray-500 rounded-xl p-6 flex flex-col items-center justify-center hover:border-cyan-400 transition-colors cursor-pointer"
-              >
-                <div className="text-gray-400 mb-2">
-                  <svg className="w-8 h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                  </svg>
-                </div>
-                <span className="text-gray-300 text-sm font-medium">Create New Session</span>
-              </div>
-            </div>
-          </div>
+            </>
+          )}
         </div>
       </div>
 
-      {/* Create Session Modal */}
+      {/* Create Session Modal (Preserved) */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-gray-900 bg-opacity-30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-gray-800 bg-opacity-95 backdrop-blur-lg rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-gray-700">
@@ -212,7 +252,7 @@ function Dashboard() {
                   placeholder="Enter session name (e.g., Biology Chapter 12)"
                   value={studySessionName}
                   onChange={(e) => setStudySessionName(e.target.value)}
-                  className="w-full px-4 py-3 bg-gray-700 bg-opacity-70 border border-gray-600 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400 focus:ring-opacity-50 transition-all"
+                  className="w-full px-4 py-3 bg-gray-700 bg-opacity-70 border border-gray-600 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400 focus:ring-cyan-400 focus:ring-opacity-50 transition-all"
                 />
               </div>
 
