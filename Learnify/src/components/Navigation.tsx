@@ -10,10 +10,10 @@ function Navigation() {
   ];
 
   return (
-    <nav className="bg-white shadow-md">
-      <div className="max-w-6xl mx-auto px-4">
-        <div className="flex justify-between items-center h-16">
-          <Link to="/" className="text-xl font-bold text-gray-800">
+    <nav className="bg-gray-900 border-b border-gray-700 w-full">
+      <div className="w-full px-6 lg:px-12">
+        <div className="flex justify-between items-center h-16 w-full">
+          <Link to="/" className="text-xl font-bold text-white hover:text-cyan-400 transition-colors">
             Learnify
           </Link>
           
@@ -24,8 +24,8 @@ function Navigation() {
                 to={item.path}
                 className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                   location.pathname === item.path
-                    ? 'text-blue-700 bg-blue-100'
-                    : 'text-gray-700 hover:text-blue-700 hover:bg-gray-100'
+                    ? 'text-cyan-400 bg-cyan-400/20'
+                    : 'text-gray-300 hover:text-cyan-400 hover:bg-cyan-400/10'
                 }`}
               >
                 {item.label}
