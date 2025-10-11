@@ -1,5 +1,6 @@
 import React, { useState, useRef } from "react";
 import openFolder from './assets/open-folder.png'
+import xIcon from './assets/x.png'
 
 const FileUpload: React.FC = () => {
     const [file, setFile] = useState<File | null>(null);
@@ -28,10 +29,13 @@ const FileUpload: React.FC = () => {
         // your upload logic here (e.g., send with fetch + FormData)
     };
 
+    const handleClear =() => {
+        setFile(null);
+    }
     return (
         <div className="p-12 border-2 border-dashed border-gray-400 rounded-xl text-center">
-            <p className="mb-4 text-lg text-gray-700">
-                {file ? `Selected file: ${file.name}` : "Upload your file here"}
+            <p className="mb-4 text-lg text-gray-700 max-w-[169px] mx-auto truncate">
+                {file ? `${file.name}` : "Upload your file here"}
             </p>
 
             {/* Hidden input */}
@@ -46,12 +50,23 @@ const FileUpload: React.FC = () => {
                 <img src={openFolder} alt="Folder icon" width={"100"} className="mx-auto mb-4"/>
 
             {/* Combined button */}
-            <button
-                onClick={handleButtonClick}
-                className="px-6 py-2 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700 transition"
-            >
-                {file ? "Upload" : "Browse File"}
-            </button>
+            <div className="flex gap-6">
+                <div className="flex-1">
+                <button
+                    onClick={handleButtonClick}
+                    className="px-6 py-2 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700 transition"
+                >
+                    {file ? "Upload" : "Browse"}
+                </button>
+                    </div>
+                <div className="flex-1">
+                <img src={xIcon} alt="Remove icon" width={"50"} className="mx-auto mb-4"
+                onClick={handleClear}
+                />
+
+                </div>
+            </div>
+
         </div>
     );
 };
