@@ -1,34 +1,62 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
-// Define the interface for the quiz question structure
 interface Question {
     question: string;
     options: string[];
     answer: string; // The correct answer string
 }
 
-// Define the component props
 interface QuizProps {
     quiz: Question[];
     onExit: () => void;
+    sessionId: string; // CRITICAL: Used to save results to the backend
 }
 
-const QuizSession: React.FC<QuizProps> = ({ quiz, onExit }) => {
-    // We use a mutable copy to handle review attempts without modifying the prop
+const QuizSession: React.FC<QuizProps> = ({ quiz, onExit, sessionId }) => {
+    const [startTime] = useState(Date.now()); // Capture start time
     const [studyDeck, setStudyDeck] = useState(quiz);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [userAnswers, setUserAnswers] = useState<string[]>(Array(quiz.length).fill(null));
     const [isFinished, setIsFinished] = useState(false);
     const [isReviewMode, setIsReviewMode] = useState(false);
 
-    if (studyDeck.length === 0) {
-        return <p className="text-white text-center">No quiz questions available.</p>;
-    }
+    // --- Core API Call to Update Progress ---
+    const sendQuizResults = async (score: number, total: number) => {
+        const timeSpent = Math.round((Date.now() - startTime) / 1000);
+        
+        try {
+            const response = await fetch(`http://127.0.0.1:5000/session/progress/${sessionId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    time_spent_seconds: timeSpent,
+                    new_quiz_score: { score, total },
+                }),
+            });
+            if (!response.ok) {
+                console.error("Failed to save quiz results.");
+            }
+        } catch (e) {
+            console.error("Network error saving quiz results:", e);
+        }
+    };
+    // ----------------------------------------
+    
+    // Calculate final score when finishing
+    const calculateScore = (deck: Question[], answers: string[]) => {
+        let score = 0;
+        deck.forEach((q, index) => {
+            if (answers[index] === q.answer) {
+                score++;
+            }
+        });
+        return score;
+    };
 
-    const currentQuestion = studyDeck[currentIndex];
 
     const handleAnswer = (selectedOption: string) => {
-        // Allow user to change their mind on the current question
+        if (isFinished) return;
+        
         const newAnswers = [...userAnswers];
         newAnswers[currentIndex] = selectedOption;
         setUserAnswers(newAnswers);
@@ -43,6 +71,9 @@ const QuizSession: React.FC<QuizProps> = ({ quiz, onExit }) => {
         if (currentIndex < studyDeck.length - 1) {
             setCurrentIndex(currentIndex + 1);
         } else {
+            // End of Quiz: Calculate score and trigger API call
+            const finalScore = calculateScore(studyDeck, userAnswers);
+            sendQuizResults(finalScore, studyDeck.length);
             setIsFinished(true);
         }
     };
@@ -53,16 +84,6 @@ const QuizSession: React.FC<QuizProps> = ({ quiz, onExit }) => {
         }
     };
     
-    const calculateScore = (deck: Question[], answers: string[]) => {
-        let score = 0;
-        deck.forEach((q, index) => {
-            if (answers[index] === q.answer) {
-                score++;
-            }
-        });
-        return score;
-    };
-
     const startRetrySession = () => {
         const incorrectQuestions: Question[] = studyDeck.filter((q, index) => userAnswers[index] !== q.answer);
         
@@ -76,8 +97,25 @@ const QuizSession: React.FC<QuizProps> = ({ quiz, onExit }) => {
         setIsReviewMode(true);
     };
     
-    // --- Rendering Logic ---
+    // --- RENDERING LOGIC ---
     
+    // 🚨 CRITICAL FIX: Add a check for an empty deck before proceeding
+    if (studyDeck.length === 0) {
+        return (
+            <div className="max-w-xl mx-auto text-center p-8 bg-gray-800 rounded-xl">
+                <h3 className="text-2xl font-bold text-white">No Quiz Questions Available</h3>
+                <p className="text-gray-300 mt-2">The AI did not generate any quiz questions for this material.</p>
+                <button onClick={onExit} className="mt-4 bg-cyan-600 hover:bg-cyan-700 text-white py-2 px-4 rounded">
+                    Back to Dashboard
+                </button>
+            </div>
+        );
+    }
+    
+    // Now that we've checked for an empty deck, we can safely define currentQuestion
+    const currentQuestion = studyDeck[currentIndex]; // 🚨 This is the definition that needed the safety check
+    const selectedAnswer = userAnswers[currentIndex];
+
     if (isFinished) {
         const score = calculateScore(studyDeck, userAnswers);
         const total = studyDeck.length;
@@ -116,8 +154,7 @@ const QuizSession: React.FC<QuizProps> = ({ quiz, onExit }) => {
         );
     }
     
-    const selectedAnswer = userAnswers[currentIndex];
-    
+    // --- Quiz Questions View ---
     return (
         <div className="max-w-xl mx-auto space-y-6">
             <h3 className="text-xl text-center text-gray-300">
@@ -136,22 +173,18 @@ const QuizSession: React.FC<QuizProps> = ({ quiz, onExit }) => {
             <div className="space-y-3">
                 {currentQuestion.options.map((option: string, index: number) => {
                     const isSelected = selectedAnswer === option;
-                    const isCorrectOption = currentQuestion.answer === option;
                     
                     let bgColor = 'bg-gray-700 hover:bg-gray-600';
                     
                     if (isSelected) {
-                        bgColor = isFinished ? (isCorrectOption ? 'bg-green-600' : 'bg-red-600') : 'bg-blue-600';
-                    } else if (isFinished && isCorrectOption) {
-                        bgColor = 'bg-green-800/70 border border-green-500';
-                    }
+                        bgColor = 'bg-blue-600';
+                    } 
 
                     return (
                         <button 
                             key={index}
                             onClick={() => handleAnswer(option)}
-                            disabled={isFinished}
-                            className={`w-full text-left p-4 rounded-lg text-white transition-colors ${bgColor} disabled:opacity-100 disabled:cursor-default`}
+                            className={`w-full text-left p-4 rounded-lg text-white transition-colors ${bgColor}`}
                         >
                             {option}
                         </button>

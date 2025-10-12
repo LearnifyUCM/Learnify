@@ -3,48 +3,59 @@ import { useLocation, Link, useNavigate } from "react-router-dom";
 import FlashcardSession from "../components/FlashcardSession";
 import QuizSession from "../components/QuizSession";
 
-// Define the shape of a saved session item (returned by backend /sessions)
+// --- INTERFACES (REVISED FOR NULL SAFETY) ---
 interface SavedSessionMeta {
-    id: string; // Unique ID used to fetch full material
+    id: string; 
     name: string;
-    created: string; // Date string
+    created: string; 
     flashcardCount: number;
     quizCount: number;
+    progress_percent: number; 
+    quiz_attempts: number;
 }
 
-// Define the structure of the AI response (full material)
+interface QuizScore {
+    timestamp: string;
+    score: number;
+    total: number;
+}
+
+interface ProgressData {
+    total_studied_seconds?: number; // Made optional for safety
+    flashcard_learned_count?: number; // Made optional for safety
+    quiz_history?: QuizScore[]; // CRITICAL: Made optional/can be undefined
+    quiz_attempts?: number;
+}
+
 interface StudyMaterial {
     flashcards?: { term: string; definition: string }[];
     quiz?: { question: string; options: string[]; answer: string }[];
     error?: string;
+    progress?: ProgressData; 
 }
-
-// NOTE: LocalStorage is no longer used for core data storage/retrieval.
+// --------------------
 
 function Dashboard() {
     const navigate = useNavigate();
     const location = useLocation();
 
-    // Data from a fresh upload (Backend returns ID and Name)
     const newSessionIdFromUpload = location.state?.session_id as string;
     const newSessionNameFromUpload = location.state?.session_name as string;
 
     // --- State Management ---
-    const [currentMode, setCurrentMode] = useState('overview'); // 'overview', 'flashcards', 'quiz'
+    const [currentMode, setCurrentMode] = useState('overview'); 
     const [sessionsMetadata, setSessionsMetadata] = useState<SavedSessionMeta[]>([]); 
-    const [activeStudyMaterial, setActiveStudyMaterial] = useState<StudyMaterial | null>(null); // CRUCIAL: Holds the data for the session currently being studied
+    const [activeStudyMaterial, setActiveStudyMaterial] = useState<StudyMaterial | null>(null); 
     const [activeSessionName, setActiveSessionName] = useState<string>(""); 
 
-    // Modal State
     const [tempSessionName, setTempSessionName] = useState(""); 
     const [showCreateModal, setShowCreateModal] = useState(false);
     
-    // UI states 
     const [isProcessing, setIsProcessing] = useState(false);
     const [apiError, setApiError] = useState<string | null>(null);
 
     const BACKEND_URL = 'http://127.0.0.1:5000'; 
-
+    
     // --- API & DATA UTILITIES ---
     
     // 1. Fetch Session Metadata (The list for the dashboard)
@@ -66,8 +77,8 @@ function Dashboard() {
     }, [BACKEND_URL]);
 
 
-    // 2. Fetch specific material by ID (used for 'Study Now')
-    const fetchSpecificMaterial = useCallback(async (sessionId: string, sessionName: string, mode: 'overview' | 'flashcards' | 'quiz') => {
+    // 2. Fetch specific material by ID (used for Study/Progress views)
+    const fetchSpecificMaterial = useCallback(async (sessionId: string, sessionName: string, mode: 'overview' | 'flashcards' | 'quiz' | 'progress') => {
         setIsProcessing(true);
         setApiError(null);
         try {
@@ -90,16 +101,24 @@ function Dashboard() {
 
     // --- EFFECTS ---
 
-    // Load session list when component mounts AND when the URL pathname changes (solves the refresh bug)
+    // Load session list when component mounts AND when the URL pathname changes (solves the list refresh bug)
     useEffect(() => {
         fetchSessionMetadata();
     }, [fetchSessionMetadata, location.pathname]);
 
+    // 🚨 FIX FOR HEADER LOCKUP: Resets active session state if user clicks header link to dashboard
+    useEffect(() => {
+        if (location.pathname === '/dashboard' && activeStudyMaterial) {
+            if (!location.state) {
+                setActiveStudyMaterial(null);
+                setCurrentMode('overview');
+            }
+        }
+    }, [location.pathname]);
 
     // Handle newly uploaded material (if redirected from Home page)
     useEffect(() => {
         if (newSessionIdFromUpload && newSessionNameFromUpload) {
-             // CRITICAL: Immediately fetch the newly created session data
             fetchSpecificMaterial(newSessionIdFromUpload, newSessionNameFromUpload, 'overview');
             // Clear location state to prevent re-fetching on refresh
             window.history.replaceState({}, document.title);
@@ -109,22 +128,28 @@ function Dashboard() {
     // --- Handlers ---
 
     const handleStudyNowClick = (sessionMeta: SavedSessionMeta) => {
-        // Load material and go to its overview
         fetchSpecificMaterial(sessionMeta.id, sessionMeta.name, 'overview');
     };
+    
+    // Handler to launch the dedicated Progress View
+    const handleViewProgressClick = (sessionMeta: SavedSessionMeta) => {
+        fetchSpecificMaterial(sessionMeta.id, sessionMeta.name, 'progress');
+    };
+
 
     const startStudy = (material: StudyMaterial, mode: 'flashcards' | 'quiz') => {
         setActiveStudyMaterial(material);
         setCurrentMode(mode);
     };
 
-    // 🚨 FIX: This is the handler that resolves the navigational lockup
+    // FIX: This is the handler that resolves the navigational lockup when EXITING a study session
     const handleExitStudy = () => {
         // 1. Reset the active material state
         setActiveStudyMaterial(null);
         // 2. Set the mode back to overview
         setCurrentMode('overview'); 
-        // The main render logic will now display the session list!
+        // 3. Force a refresh of the list to show new progress percentage
+        fetchSessionMetadata();
     };
 
     const handleCreateNewSession = () => {
@@ -149,7 +174,74 @@ function Dashboard() {
         setTempSessionName("");
     };
 
-    // --- RENDER LOGIC ---
+    // --- RENDER LOGIC COMPONENTS ---
+    
+    // Utility to convert seconds to HH:MM:SS format
+    const formatTime = (seconds: number) => {
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = Math.round(seconds % 60);
+        return [h, m, s]
+            .map(v => v < 10 ? "0" + v : v)
+            .filter((v, i) => v !== "00" || i > 0 || i === 2) 
+            .join(":");
+    };
+
+    // 🚨 FINAL FIX APPLIED HERE 🚨
+    const renderProgressView = () => {
+        // 🚨 CRITICAL FIX: Use optional chaining and default empty arrays/zeroes
+        const progress: ProgressData = activeStudyMaterial?.progress || {};
+        const quizHistory = progress.quiz_history || [];
+        const totalFlashcards = (activeStudyMaterial?.flashcards || []).length;
+        
+        return (
+            <div className="space-y-8 mb-12 max-w-4xl mx-auto">
+                <button onClick={() => setCurrentMode('overview')} className="mb-6 px-4 py-2 bg-gray-700 rounded text-white hover:bg-gray-600">
+                    « Back to Study Actions
+                </button>
+                <h2 className="text-4xl font-bold text-white text-center mb-6">
+                    Progress & Analytics for "{activeSessionName}"
+                </h2>
+
+                {/* Overall Stats Grid */}
+                <div className="grid grid-cols-3 gap-4 text-center">
+                    <div className="p-4 bg-gray-700 rounded-lg">
+                        <p className="text-xl font-bold text-cyan-400">{progress.total_studied_seconds ? formatTime(progress.total_studied_seconds) : "00:00"}</p>
+                        <p className="text-sm text-gray-400">Total Study Time</p>
+                    </div>
+                    <div className="p-4 bg-gray-700 rounded-lg">
+                        <p className="text-xl font-bold text-cyan-400">{progress.flashcard_learned_count || 0} / {totalFlashcards}</p>
+                        <p className="text-sm text-gray-400">Flashcards Mastered</p>
+                    </div>
+                    <div className="p-4 bg-gray-700 rounded-lg">
+                        <p className="text-xl font-bold text-cyan-400">{progress.quiz_attempts || 0}</p>
+                        <p className="text-sm text-gray-400">Quiz Attempts</p>
+                    </div>
+                </div>
+
+                {/* Quiz History */}
+                <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700">
+                    <h3 className="text-2xl font-semibold text-white mb-4">Quiz History</h3>
+                    <div className="space-y-2 max-h-60 overflow-y-auto">
+                        {quizHistory.length === 0 ? (
+                            <p className="text-gray-400">No quizzes attempted yet.</p>
+                        ) : (
+                            quizHistory.slice().reverse().map((attempt, index) => ( // Reverse to show latest first
+                                <div key={index} className="flex justify-between items-center bg-gray-700 p-3 rounded-lg">
+                                    <p className="text-white">Attempt {quizHistory.length - index}</p>
+                                    <p className="text-gray-400 text-sm">{new Date(attempt.timestamp).toLocaleTimeString()}</p>
+                                    <p className={`font-bold ${attempt.score / attempt.total >= 0.8 ? 'text-green-400' : 'text-red-400'}`}>
+                                        {attempt.score} / {attempt.total}
+                                    </p>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
 
     // Renders the study options (flashcards/quiz) for the active material
     const renderActiveMaterialView = () => {
@@ -166,15 +258,22 @@ function Dashboard() {
                 </div>
             );
         }
+        
+        // 🚨 FIX: RENDER PROGRESS VIEW MODE
+        if (currentMode === 'progress') {
+            return renderProgressView();
+        }
 
         const { flashcards, quiz } = activeStudyMaterial;
+        const currentSessionMeta = sessionsMetadata.find(s => s.name === activeSessionName);
+        const sessionId = currentSessionMeta?.id || 'unknown'; 
 
         // RENDER INTERACTIVE SESSION
         if (currentMode === 'flashcards') {
-            return <FlashcardSession flashcards={flashcards || []} onExit={handleExitStudy} />;
+            return <FlashcardSession flashcards={flashcards || []} onExit={handleExitStudy} sessionId={sessionId} />;
         }
         if (currentMode === 'quiz') {
-            return <QuizSession quiz={quiz || []} onExit={handleExitStudy} />;
+            return <QuizSession quiz={quiz || []} onExit={handleExitStudy} sessionId={sessionId} />;
         }
 
         // Default: Overview Mode
@@ -184,7 +283,7 @@ function Dashboard() {
                     Study Actions for "{activeSessionName}"
                 </h2>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="grid grid-cols-3 gap-8">
                     {/* Flashcards Overview Block */}
                     <div className="bg-gray-800 bg-opacity-70 rounded-2xl p-6 border border-gray-700">
                         <h3 className="text-2xl font-semibold mb-4 text-white">Flashcards ({(flashcards || []).length})</h3>
@@ -208,7 +307,23 @@ function Dashboard() {
                             Take Quiz Session
                         </button>
                     </div>
+                    
+                    {/* View Progress Block */}
+                    <div className="bg-gray-800 bg-opacity-70 rounded-2xl p-6 border border-gray-700">
+                        <h3 className="text-2xl font-semibold mb-4 text-white">Analytics</h3>
+                        <p className="text-gray-300 mb-6">Track your progress and quiz history.</p>
+                        <button 
+                            onClick={() => setCurrentMode('progress')}
+                            className="w-full bg-cyan-600 hover:bg-cyan-700 text-white py-3 rounded-lg font-medium transition-colors"
+                        >
+                            View Progress
+                        </button>
+                    </div>
                 </div>
+                
+                <button onClick={handleExitStudy} className="mt-8 px-6 py-3 bg-gray-700 rounded-lg text-white hover:bg-gray-600">
+                    Return to Session List
+                </button>
             </div>
         );
     };
@@ -228,17 +343,44 @@ function Dashboard() {
                         <p className="text-gray-400 text-center py-4">No study sessions yet. Create one!</p>
                     ) : (
                         sessionsMetadata.map((session, index) => (
-                            <div key={session.id} className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-4 hover:bg-opacity-70 transition-all">
-                                <h3 className="font-semibold text-white mb-2">{session.name}</h3>
-                                <p className="text-sm text-gray-300 mb-3">Created {session.created}</p>
-                                <div className="flex justify-between items-center">
-                                    <span className="text-xs bg-green-500 text-white px-3 py-1 rounded-full">{session.flashcardCount} flashcards</span>
-                                    <button 
-                                        onClick={() => handleStudyNowClick(session)}
-                                        className="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                                    >
-                                        Study Now
-                                    </button>
+                            <div key={session.id} className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-4 transition-all">
+                                
+                                <div className="flex justify-between items-start">
+                                    {/* Session Info */}
+                                    <div className="flex-1">
+                                        <h3 className="font-semibold text-white mb-2">{session.name}</h3>
+                                        <p className="text-xs text-gray-400 mb-3">Created {session.created}</p>
+                                    </div>
+                                    
+                                    {/* Action Buttons Group */}
+                                    <div className="flex space-x-2 flex-shrink-0">
+                                        <button 
+                                            onClick={() => handleViewProgressClick(session)}
+                                            className="bg-cyan-600/50 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+                                        >
+                                            View Progress
+                                        </button>
+                                        <button 
+                                            onClick={() => handleStudyNowClick(session)}
+                                            className="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                                        >
+                                            Study Now
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Progress Bar and Stats */}
+                                <div className="mt-4 pt-3 border-t border-gray-600">
+                                    <p className="text-xs text-gray-400 mb-1">
+                                        Progress: **{session.progress_percent}% mastered** | {session.quiz_attempts} quiz attempt{session.quiz_attempts !== 1 ? 's' : ''}
+                                    </p>
+                                    <div className="w-full bg-gray-500 rounded-full h-2.5">
+                                        <div 
+                                            className="bg-cyan-500 h-2.5 rounded-full" 
+                                            style={{ width: `${session.progress_percent}%` }}
+                                        ></div>
+                                    </div>
+                                    <p className="text-xs text-gray-300 mt-2">Cards: {session.flashcardCount} | Quizzes: {session.quizCount}</p>
                                 </div>
                             </div>
                         ))
