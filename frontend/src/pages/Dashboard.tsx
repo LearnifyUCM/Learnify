@@ -1,354 +1,338 @@
-import { useState } from "react";
-import { useLocation } from "react-router-dom"; 
-// CRITICAL: Import the new interactive components
+import { useState, useEffect, useCallback } from "react";
+import { useLocation, Link, useNavigate } from "react-router-dom"; 
 import FlashcardSession from "../components/FlashcardSession";
 import QuizSession from "../components/QuizSession";
 
+// Define the shape of a saved session item (returned by backend /sessions)
+interface SavedSessionMeta {
+    id: string; // Unique ID used to fetch full material
+    name: string;
+    created: string; // Date string
+    flashcardCount: number;
+    quizCount: number;
+}
+
+// Define the structure of the AI response (full material)
+interface StudyMaterial {
+    flashcards?: { term: string; definition: string }[];
+    quiz?: { question: string; options: string[]; answer: string }[];
+    error?: string;
+}
+
+// NOTE: LocalStorage is no longer used for core data storage/retrieval.
+
 function Dashboard() {
-  // --- CRASH FIX & DATA RETRIEVAL ---
-  const location = useLocation();
-  const uploadedMaterial = location.state?.studyMaterial;
-  const sessionName = location.state?.sessionName || "Study Dashboard";
-  const hasNewMaterial = uploadedMaterial && uploadedMaterial.flashcards && uploadedMaterial.quiz;
-  
-  // NEW STATE: Controls whether we show the overview/dashboard or the active session
-  const [currentMode, setCurrentMode] = useState('overview'); 
-  // ------------------------------------
+    const navigate = useNavigate();
+    const location = useLocation();
 
-  const [studySessionName, setStudySessionName] = useState("");
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [dragActive, setDragActive] = useState(false);
+    // Data from a fresh upload (Backend returns ID and Name)
+    const newSessionIdFromUpload = location.state?.session_id as string;
+    const newSessionNameFromUpload = location.state?.session_name as string;
 
-  // --- Original Functions (Preserved) ---
-  const handleCreateSession = () => {
-    setShowCreateModal(true);
-  };
+    // --- State Management ---
+    const [currentMode, setCurrentMode] = useState('overview'); // 'overview', 'flashcards', 'quiz'
+    const [sessionsMetadata, setSessionsMetadata] = useState<SavedSessionMeta[]>([]); 
+    const [activeStudyMaterial, setActiveStudyMaterial] = useState<StudyMaterial | null>(null); // CRUCIAL: Holds the data for the session currently being studied
+    const [activeSessionName, setActiveSessionName] = useState<string>(""); 
 
-  const closeModal = () => {
-    setShowCreateModal(false);
-    setStudySessionName("");
-    setSelectedFiles([]);
-  };
-  
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      const newFiles = Array.from(e.target.files);
-      setSelectedFiles(prev => [...prev, ...newFiles]);
-    }
-  };
-
-  const handleDrag = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") {
-      setDragActive(true);
-    } else if (e.type === "dragleave") {
-      setDragActive(false);
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
+    // Modal State
+    const [tempSessionName, setTempSessionName] = useState(""); 
+    const [showCreateModal, setShowCreateModal] = useState(false);
     
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const newFiles = Array.from(e.dataTransfer.files);
-      setSelectedFiles(prev => [...prev, ...newFiles]);
-    }
-  };
+    // UI states 
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [apiError, setApiError] = useState<string | null>(null);
 
-  const removeFile = (index: number) => {
-    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
-  };
+    const BACKEND_URL = 'http://127.0.0.1:5000'; 
 
-  const handleSubmit = () => {
-    if (studySessionName.trim() && selectedFiles.length > 0) {
-      console.log("Creating session:", studySessionName, "with files:", selectedFiles);
-      closeModal();
-    }
-  };
-  // ----------------------------------------
-  
-  
-  // --- NEW: RENDER LOGIC FOR DIFFERENT MODES (OVERVIEW, FLASHCARDS, QUIZ) ---
-  const renderGeneratedMaterial = () => {
-      if (!uploadedMaterial) return null;
+    // --- API & DATA UTILITIES ---
+    
+    // 1. Fetch Session Metadata (The list for the dashboard)
+    const fetchSessionMetadata = useCallback(async () => {
+        setIsProcessing(true);
+        try {
+            const response = await fetch(`${BACKEND_URL}/sessions`);
+            if (response.ok) {
+                const metadata: SavedSessionMeta[] = await response.json();
+                setSessionsMetadata(metadata);
+            } else {
+                 setApiError("Could not connect to fetch session list.");
+            }
+        } catch (e) {
+             setApiError("Network error: Backend server is likely offline.");
+        } finally {
+            setIsProcessing(false);
+        }
+    }, [BACKEND_URL]);
 
-      // Check for backend error (like extraction failure)
-      if (uploadedMaterial.error) {
-          return (
-              <div className="bg-red-900 bg-opacity-50 backdrop-blur-lg rounded-2xl p-6 border border-red-700 mb-12">
-                  <h3 className="text-xl font-semibold text-white">Extraction Failed!</h3>
-                  <p className="text-sm text-red-300 mt-2">
-                      Error: {uploadedMaterial.error}. Please try a clean, machine-readable PDF.
-                  </p>
-              </div>
-          );
-      }
 
-      const { flashcards, quiz } = uploadedMaterial;
+    // 2. Fetch specific material by ID (used for 'Study Now')
+    const fetchSpecificMaterial = useCallback(async (sessionId: string, sessionName: string, mode: 'overview' | 'flashcards' | 'quiz') => {
+        setIsProcessing(true);
+        setApiError(null);
+        try {
+            const response = await fetch(`${BACKEND_URL}/session/${sessionId}`);
+            const material: StudyMaterial = await response.json();
 
-      // 🚨 RENDER INTERACTIVE SESSION
-      if (currentMode === 'flashcards') {
-          return <FlashcardSession 
-                     flashcards={flashcards} 
-                     onExit={() => setCurrentMode('overview')}
-                 />;
-      }
-      if (currentMode === 'quiz') {
-          return <QuizSession 
-                     quiz={quiz} 
-                     onExit={() => setCurrentMode('overview')}
-                 />;
-      }
+            if (response.ok && !material.error) {
+                setActiveStudyMaterial(material);
+                setActiveSessionName(sessionName);
+                setCurrentMode(mode);
+            } else {
+                setApiError(material.error || "Failed to load session material.");
+            }
+        } catch (e) {
+            setApiError("Network error: Could not connect to retrieve study material.");
+        } finally {
+            setIsProcessing(false);
+        }
+    }, [BACKEND_URL]);
 
-      // Default: Overview Mode (Initial view after successful upload)
-      return (
-          <div className="space-y-8 mb-12">
-              <h2 className="text-3xl font-bold text-cyan-400 text-center">
-                  Study Actions for "{sessionName.replace('.pdf', '')}"
-              </h2>
+    // --- EFFECTS ---
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  {/* Flashcards Overview Block */}
-                  <div className="bg-gray-800 bg-opacity-70 rounded-2xl p-6 border border-gray-700">
-                      <h3 className="text-2xl font-semibold mb-4 text-white">Flashcards ({flashcards.length})</h3>
-                      <p className="text-gray-300 mb-6">Review key terms and definitions.</p>
-                      <button 
-                          onClick={() => setCurrentMode('flashcards')} // <-- SET MODE
-                          className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-medium transition-colors"
-                      >
-                          Start Flashcard Session
-                      </button>
-                  </div>
+    // Load session list when component mounts AND when the URL pathname changes (solves the refresh bug)
+    useEffect(() => {
+        fetchSessionMetadata();
+    }, [fetchSessionMetadata, location.pathname]);
 
-                  {/* Quiz Overview Block */}
-                  <div className="bg-gray-800 bg-opacity-70 rounded-2xl p-6 border border-gray-700">
-                      <h3 className="text-2xl font-semibold mb-4 text-white">Quiz ({quiz.length})</h3>
-                      <p className="text-gray-300 mb-6">Test your knowledge with multiple-choice questions.</p>
-                      <button 
-                          onClick={() => setCurrentMode('quiz')} // <-- SET MODE
-                          className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg font-medium transition-colors"
-                      >
-                          Take Quiz Session
-                      </button>
-                  </div>
-              </div>
-          </div>
-      );
-  };
-  // -----------------------------------------------------
 
-  
-  return (
-    <div className="min-h-screen w-full relative">
-      <div className="relative z-10 w-full px-6 lg:px-12 py-8">
-        <div className="max-w-6xl mx-auto">
-          <h1 className="text-4xl font-bold mb-8 text-white text-center">
-            {/* Display Interactive Session title when active, otherwise the generic title */}
-            {currentMode === 'overview' ? (hasNewMaterial ? `Material: ${sessionName.replace('.pdf', '')}` : 'Study Dashboard') : 'Interactive Session'}
-          </h1>
-          
-          
-          {/* RENDER DYNAMIC CONTENT */}
-          {hasNewMaterial && renderGeneratedMaterial()}
-          
-          {/* Only show old dashboard content if we are in overview and have no new material to focus on */}
-          {currentMode === 'overview' && !hasNewMaterial && (
-            <>
-              {/* Quick Actions Bar */}
-              <div className="mb-12 bg-gray-800 bg-opacity-50 backdrop-blur-lg rounded-2xl p-6 border border-gray-700">
-                <h3 className="text-xl font-semibold mb-4 text-white flex items-center gap-2">
-                  Quick Actions
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <button className="w-full bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-3 rounded-xl transition-colors flex items-center justify-center gap-2 font-medium">
-                    Upload New PDF
-                  </button>
-                  <button className="w-full bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-3 rounded-xl transition-colors flex items-center justify-center gap-2 font-medium">
-                    Start Study Session
-                  </button>
-                  <button className="w-full bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-3 rounded-xl transition-colors flex items-center justify-center gap-2 font-medium">
-                    View Analytics
-                  </button>
+    // Handle newly uploaded material (if redirected from Home page)
+    useEffect(() => {
+        if (newSessionIdFromUpload && newSessionNameFromUpload) {
+             // CRITICAL: Immediately fetch the newly created session data
+            fetchSpecificMaterial(newSessionIdFromUpload, newSessionNameFromUpload, 'overview');
+            // Clear location state to prevent re-fetching on refresh
+            window.history.replaceState({}, document.title);
+        }
+    }, [newSessionIdFromUpload, newSessionNameFromUpload, fetchSpecificMaterial]);
+
+    // --- Handlers ---
+
+    const handleStudyNowClick = (sessionMeta: SavedSessionMeta) => {
+        // Load material and go to its overview
+        fetchSpecificMaterial(sessionMeta.id, sessionMeta.name, 'overview');
+    };
+
+    const startStudy = (material: StudyMaterial, mode: 'flashcards' | 'quiz') => {
+        setActiveStudyMaterial(material);
+        setCurrentMode(mode);
+    };
+
+    // 🚨 FIX: This is the handler that resolves the navigational lockup
+    const handleExitStudy = () => {
+        // 1. Reset the active material state
+        setActiveStudyMaterial(null);
+        // 2. Set the mode back to overview
+        setCurrentMode('overview'); 
+        // The main render logic will now display the session list!
+    };
+
+    const handleCreateNewSession = () => {
+        if (!isProcessing) {
+            setShowCreateModal(true);
+            setApiError(null);
+            setTempSessionName(""); // Clear input on open
+        }
+    };
+
+    // Submits the new session name from modal and redirects to Home
+    const handleSubmitNewSession = () => {
+        if (tempSessionName.trim()) {
+            // Redirect to Home page's file selection screen
+            navigate('/', { state: { openModal: true, sessionName: tempSessionName.trim() } });
+            setShowCreateModal(false); // Close dashboard modal
+        }
+    };
+
+    const closeModal = () => {
+        setShowCreateModal(false);
+        setTempSessionName("");
+    };
+
+    // --- RENDER LOGIC ---
+
+    // Renders the study options (flashcards/quiz) for the active material
+    const renderActiveMaterialView = () => {
+        if (!activeStudyMaterial) return null;
+
+        if (activeStudyMaterial.error) {
+            return (
+                <div className="bg-red-900 bg-opacity-50 rounded-2xl p-6 border border-red-700 mb-12">
+                    <h3 className="text-xl font-semibold text-white">Generation Failed!</h3>
+                    <p className="text-sm text-red-300 mt-2">Error: {activeStudyMaterial.error}.</p>
+                    <button onClick={handleExitStudy} className="mt-4 bg-gray-500 hover:bg-gray-600 text-white py-2 px-4 rounded">
+                        Return to List
+                    </button>
                 </div>
-              </div>
+            );
+        }
 
-              {/* Study Sessions */}
-              <div className="bg-gray-800 bg-opacity-50 backdrop-blur-lg rounded-2xl p-6 border border-gray-700">
-                <h2 className="text-2xl font-semibold mb-6 text-white">
-                  Your Study Sessions
+        const { flashcards, quiz } = activeStudyMaterial;
+
+        // RENDER INTERACTIVE SESSION
+        if (currentMode === 'flashcards') {
+            return <FlashcardSession flashcards={flashcards || []} onExit={handleExitStudy} />;
+        }
+        if (currentMode === 'quiz') {
+            return <QuizSession quiz={quiz || []} onExit={handleExitStudy} />;
+        }
+
+        // Default: Overview Mode
+        return (
+            <div className="space-y-8 mb-12">
+                <h2 className="text-3xl font-bold text-cyan-400 text-center">
+                    Study Actions for "{activeSessionName}"
                 </h2>
-                
-                {/* Study Sessions Grid (Original Content) */}
-                <div className="space-y-4">
-                  <div className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-4 hover:bg-opacity-70 transition-all">
-                    <h3 className="font-semibold text-white mb-2">Biology Chapter 12</h3>
-                    <p className="text-sm text-gray-300 mb-3">Created 2 hours ago</p>
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs bg-green-500 text-white px-3 py-1 rounded-full">45 flashcards</span>
-                      <button className="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-                        Study Now
-                      </button>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {/* Flashcards Overview Block */}
+                    <div className="bg-gray-800 bg-opacity-70 rounded-2xl p-6 border border-gray-700">
+                        <h3 className="text-2xl font-semibold mb-4 text-white">Flashcards ({(flashcards || []).length})</h3>
+                        <p className="text-gray-300 mb-6">Review key terms and definitions.</p>
+                        <button 
+                            onClick={() => startStudy(activeStudyMaterial, 'flashcards')}
+                            className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-medium transition-colors"
+                        >
+                            Start Flashcard Session
+                        </button>
                     </div>
-                  </div>
-                  
-                  <div className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-4 hover:bg-opacity-70 transition-all">
-                    <h3 className="font-semibold text-white mb-2">Physics Formulas</h3>
-                    <p className="text-sm text-gray-300 mb-3">Created 1 day ago</p>
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs bg-blue-500 text-white px-3 py-1 rounded-full">23 flashcards</span>
-                      <button className="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-                        Study Now
-                      </button>
+
+                    {/* Quiz Overview Block */}
+                    <div className="bg-gray-800 bg-opacity-70 rounded-2xl p-6 border border-gray-700">
+                        <h3 className="text-2xl font-semibold mb-4 text-white">Quiz ({(quiz || []).length})</h3>
+                        <p className="text-gray-300 mb-6">Test your knowledge with multiple-choice questions.</p>
+                        <button 
+                            onClick={() => startStudy(activeStudyMaterial, 'quiz')}
+                            className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg font-medium transition-colors"
+                        >
+                            Take Quiz Session
+                        </button>
                     </div>
-                  </div>
-                  
-                  <div 
-                    onClick={handleCreateSession}
+                </div>
+            </div>
+        );
+    };
+
+    // Renders the list of all saved study sessions
+    const renderSessionList = () => (
+        <div className="bg-gray-800 bg-opacity-50 backdrop-blur-lg rounded-2xl p-6 border border-gray-700">
+            <h2 className="text-2xl font-semibold mb-6 text-white">
+                Your Study Sessions
+            </h2>
+
+            <div className="space-y-4">
+                {isProcessing ? (
+                    <p className="text-cyan-400 text-center py-4 animate-pulse">Loading sessions from backend...</p>
+                ) : (
+                    sessionsMetadata.length === 0 ? (
+                        <p className="text-gray-400 text-center py-4">No study sessions yet. Create one!</p>
+                    ) : (
+                        sessionsMetadata.map((session, index) => (
+                            <div key={session.id} className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-4 hover:bg-opacity-70 transition-all">
+                                <h3 className="font-semibold text-white mb-2">{session.name}</h3>
+                                <p className="text-sm text-gray-300 mb-3">Created {session.created}</p>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-xs bg-green-500 text-white px-3 py-1 rounded-full">{session.flashcardCount} flashcards</span>
+                                    <button 
+                                        onClick={() => handleStudyNowClick(session)}
+                                        className="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                                    >
+                                        Study Now
+                                    </button>
+                                </div>
+                            </div>
+                        ))
+                    )
+                )}
+
+                {/* Create New Session button */}
+                <div
+                    onClick={handleCreateNewSession}
                     className="border-2 border-dashed border-gray-500 rounded-xl p-6 flex flex-col items-center justify-center hover:border-cyan-400 transition-colors cursor-pointer"
-                  >
+                >
                     <div className="text-gray-400 mb-2">
-                      <svg className="w-8 h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                      </svg>
+                        <svg className="w-8 h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                        </svg>
                     </div>
                     <span className="text-gray-300 text-sm font-medium">Create New Session</span>
-                  </div>
                 </div>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Create Session Modal (Preserved) */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-gray-900 bg-opacity-30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 bg-opacity-95 backdrop-blur-lg rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-gray-700">
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-2xl font-bold text-white">
-                  Create New Study Session
-                </h2>
-                <button
-                  onClick={closeModal}
-                  className="text-gray-400 hover:text-white transition-colors"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-
-              {/* Session Name Input */}
-              <div className="mb-6">
-                <label className="block text-gray-300 text-sm font-medium mb-3">
-                  Study Session Name
-                </label>
-                <input
-                  type="text"
-                  placeholder="Enter session name (e.g., Biology Chapter 12)"
-                  value={studySessionName}
-                  onChange={(e) => setStudySessionName(e.target.value)}
-                  className="w-full px-4 py-3 bg-gray-700 bg-opacity-70 border border-gray-600 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400 focus:ring-cyan-400 focus:ring-opacity-50 transition-all"
-                />
-              </div>
-
-              {/* File Upload Area */}
-              <div className="mb-6">
-                <label className="block text-gray-300 text-sm font-medium mb-3">
-                  Upload PDF Files
-                </label>
-                <div
-                  className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
-                    dragActive 
-                      ? 'border-cyan-400 bg-cyan-400 bg-opacity-10' 
-                      : 'border-gray-600 hover:border-cyan-400'
-                  }`}
-                  onDragEnter={handleDrag}
-                  onDragLeave={handleDrag}
-                  onDragOver={handleDrag}
-                  onDrop={handleDrop}
-                >
-                  <div className="text-gray-400 mb-4">
-                    <svg className="w-12 h-12 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                    </svg>
-                    <p className="text-gray-300 text-lg font-medium">Drop PDF files here or click to browse</p>
-                    <p className="text-gray-500 text-sm mt-1">You can upload multiple PDFs at once</p>
-                  </div>
-                  <input
-                    type="file"
-                    multiple
-                    accept=".pdf"
-                    onChange={handleFileChange}
-                    className="hidden"
-                    id="file-upload"
-                  />
-                  <label
-                    htmlFor="file-upload"
-                    className="inline-block bg-cyan-600 hover:bg-cyan-700 text-white px-6 py-2 rounded-lg cursor-pointer transition-colors"
-                  >
-                    Choose Files
-                  </label>
-                </div>
-              </div>
-
-              {/* Selected Files List */}
-              {selectedFiles.length > 0 && (
-                <div className="mb-6">
-                  <h4 className="text-gray-300 text-sm font-medium mb-3">
-                    Selected Files ({selectedFiles.length})
-                  </h4>
-                  <div className="space-y-2 max-h-32 overflow-y-auto">
-                    {selectedFiles.map((file, index) => (
-                      <div key={index} className="flex items-center justify-between bg-gray-700 bg-opacity-50 rounded-lg p-3">
-                        <div className="flex items-center gap-3">
-                          <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                          </svg>
-                          <span className="text-white text-sm">{file.name}</span>
-                          <span className="text-gray-400 text-xs">({(file.size / 1024 / 1024).toFixed(1)} MB)</span>
-                        </div>
-                        <button
-                          onClick={() => removeFile(index)}
-                          className="text-gray-400 hover:text-red-400 transition-colors"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Action Buttons */}
-              <div className="flex gap-4">
-                <button
-                  onClick={closeModal}
-                  className="flex-1 px-4 py-3 bg-gray-600 hover:bg-gray-700 text-white rounded-xl transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSubmit}
-                  disabled={!studySessionName.trim() || selectedFiles.length === 0}
-                  className="flex-1 px-4 py-3 bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-xl transition-colors"
-                >
-                  Create Session
-                </button>
-              </div>
             </div>
-          </div>
         </div>
-      )}
-    </div>
-  );
+    );
+
+    // --- MAIN RENDER ---
+    return (
+        <div className="min-h-screen w-full relative">
+            <div className="relative z-10 w-full px-6 lg:px-12 py-8">
+                <div className="max-w-6xl mx-auto">
+                    <h1 className="text-4xl font-bold mb-8 text-white text-center">
+                        {activeStudyMaterial ? `Material: ${activeSessionName}` : 'Study Dashboard'}
+                    </h1>
+
+                    {/* Error message display is crucial here */}
+                    {apiError && (
+                        <div className="text-center py-4 bg-red-800 text-white rounded-xl mb-4">
+                            API Error: {apiError}
+                        </div>
+                    )}
+
+                    {/* Conditional rendering based on active study session */}
+                    {activeStudyMaterial ? renderActiveMaterialView() : renderSessionList()}
+                </div>
+            </div>
+
+            {/* Create New Session Modal */}
+            {showCreateModal && (
+                <div className="fixed inset-0 bg-gray-900 bg-opacity-30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                    <div className="bg-gray-800 bg-opacity-95 backdrop-blur-lg rounded-2xl shadow-2xl max-w-sm w-full border border-gray-700">
+                        <div className="p-6">
+                            <div className="flex justify-between items-center mb-6">
+                                <h2 className="text-xl font-bold text-white">Name Your Session</h2>
+                                <button
+                                    onClick={closeModal}
+                                    className="text-gray-400 hover:text-white transition-colors"
+                                >
+                                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                </button>
+                            </div>
+
+                            <div className="mb-6">
+                                <label className="block text-gray-300 text-sm font-medium mb-3">
+                                    Study Session Name
+                                </label>
+                                <input
+                                    type="text"
+                                    placeholder="e.g., Chemistry Midterm Prep"
+                                    value={tempSessionName}
+                                    onChange={(e) => setTempSessionName(e.target.value)}
+                                    className="w-full px-4 py-3 bg-gray-700 bg-opacity-70 border border-gray-600 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400 transition-all"
+                                />
+                            </div>
+
+                            <div className="flex gap-4">
+                                <button
+                                    onClick={closeModal}
+                                    className="flex-1 px-4 py-3 bg-gray-600 hover:bg-gray-700 text-white rounded-xl transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleSubmitNewSession}
+                                    disabled={!tempSessionName.trim()}
+                                    className="flex-1 px-4 py-3 bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-xl transition-colors"
+                                >
+                                    Continue to Upload
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
 }
 
 export default Dashboard;
