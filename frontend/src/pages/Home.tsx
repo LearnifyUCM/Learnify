@@ -1,6 +1,5 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom"; // 🚨 CRITICAL: Add useNavigate
-import React from 'react'; // Added explicit React import
+import { useState, useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom"; 
 
 // Define the expected structure of the AI response
 interface StudyMaterial {
@@ -10,15 +9,31 @@ interface StudyMaterial {
 }
 
 function Home() {
-    const navigate = useNavigate(); // Initialize useNavigate
+    const location = useLocation(); 
+    const navigate = useNavigate();
+
     const [studySessionName, setStudySessionName] = useState("");
     const [showFileUpload, setShowFileUpload] = useState(false);
     const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
     const [dragActive, setDragActive] = useState(false);
-    const [isProcessing, setIsProcessing] = useState(false); // New state for loading
-    const [apiError, setApiError] = useState<string | null>(null); // New state for API errors
+    const [isProcessing, setIsProcessing] = useState(false); 
+    const [apiError, setApiError] = useState<string | null>(null);
 
-    const BACKEND_URL = 'http://127.0.0.1:5000'; // Define the backend URL
+    const BACKEND_URL = 'http://127.0.0.1:5000'; 
+
+    // --- EFFECT: Handle Incoming Navigation State from Dashboard ---
+    useEffect(() => {
+        const state = location.state as { openModal: boolean; sessionName: string } | undefined;
+        
+        if (state?.openModal) {
+            setStudySessionName(state.sessionName);
+            setShowFileUpload(true);
+            
+            // Clear the state after use to prevent conflicts on refresh
+            window.history.replaceState({}, document.title);
+        }
+    }, [location.state]); 
+
 
     const handleCreateSession = () => {
         if (studySessionName.trim()) {
@@ -30,7 +45,6 @@ function Home() {
     const handleBack = () => {
         setShowFileUpload(false);
         setSelectedFiles([]);
-        setApiError(null);
     };
 
     const handleDrag = (e: React.DragEvent) => {
@@ -65,44 +79,45 @@ function Home() {
         setSelectedFiles(prev => prev.filter((_, i) => i !== index));
     };
 
-    // 🚨 CRITICAL FIX: ASYNCHRONOUS API SUBMISSION LOGIC
+    // 🚨 FIX: SUBMISSION LOGIC TO SEND CUSTOM NAME TO BACKEND 🚨
     const handleSubmit = async () => {
         if (selectedFiles.length === 0 || !studySessionName.trim()) return;
 
-        // Process the first file in the array for simplicity
         const file = selectedFiles[0]; 
 
         setIsProcessing(true);
         setApiError(null);
         
         const formData = new FormData();
-        formData.append('file', file); 
+        formData.append('file', file);
+        // CRITICAL FIX: Send the custom name separately
+        formData.append('custom_session_name', studySessionName.trim()); 
 
         try {
-            console.log(`SUBMIT_HOME: Sending API request for ${file.name} to ${BACKEND_URL}/upload`);
+            console.log(`SUBMIT_HOME: Sending API request for ${file.name} with session name: ${studySessionName.trim()}`);
 
             const response = await fetch(`${BACKEND_URL}/upload`, {
                 method: 'POST',
                 body: formData,
             });
 
-            const result: StudyMaterial = await response.json();
+            const result = await response.json();
 
-            if (!response.ok || result.error) {
+            if (!response.ok) {
                 console.error('SUBMIT_HOME: Backend returned error:', result.error || response.statusText);
                 setApiError(result.error || `Server Error: ${response.status} ${response.statusText}`);
                 return;
             }
 
-            // SUCCESS: Reset state and navigate to Dashboard with data
+            // SUCCESS: Redirect to Dashboard with the new Session ID and Name (passed from backend)
             setShowFileUpload(false);
             setStudySessionName("");
             setSelectedFiles([]);
             
             navigate('/dashboard', { 
                 state: { 
-                    studyMaterial: result, 
-                    sessionName: file.name.trim()
+                    session_id: result.session_id, 
+                    session_name: result.session_name // Backend will return the custom name here
                 } 
             });
 
@@ -192,7 +207,8 @@ function Home() {
                             <div className="flex items-center mb-8">
                                 <button
                                     onClick={handleBack}
-                                    className="mr-4 p-2 text-gray-400 hover:text-white transition-colors"
+                                    disabled={isProcessing}
+                                    className="mr-4 p-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50"
                                 >
                                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -292,7 +308,7 @@ function Home() {
                                         Back
                                     </button>
                                     <button
-                                        onClick={handleSubmit} // Calls the API logic
+                                        onClick={handleSubmit}
                                         disabled={selectedFiles.length === 0 || isProcessing}
                                         className="flex-2 px-8 py-3 bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
                                     >

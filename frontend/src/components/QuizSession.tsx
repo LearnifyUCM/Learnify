@@ -13,15 +13,38 @@ interface QuizProps {
 }
 
 const QuizSession: React.FC<QuizProps> = ({ quiz, onExit, sessionId }) => {
-    const [startTime] = useState(Date.now()); // Capture start time
+    const [startTime] = useState(Date.now()); 
     const [studyDeck, setStudyDeck] = useState(quiz);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [userAnswers, setUserAnswers] = useState<string[]>(Array(quiz.length).fill(null));
     const [isFinished, setIsFinished] = useState(false);
     const [isReviewMode, setIsReviewMode] = useState(false);
+    
+    // Feedback states
+    const [selectedOption, setSelectedOption] = useState<string | null>(null);
+    const [showFeedback, setShowFeedback] = useState(false); // Controls the red/green highlight
 
-    // --- Core API Call to Update Progress ---
-    const sendQuizResults = async (score: number, total: number) => {
+    // Explanation states
+    const [showExplanationModal, setShowExplanationModal] = useState(false);
+    const [explanationText, setExplanationText] = useState("Loading explanation...");
+    const [isExplaining, setIsExplaining] = useState(false);
+
+    // --- State Synchronization Effect ---
+    useEffect(() => {
+        // When currentIndex changes (going next or back), load the recorded answer
+        setSelectedOption(userAnswers[currentIndex] || null);
+        
+        // Reset feedback state based on whether an answer is recorded for the new question
+        if (userAnswers[currentIndex] !== null) {
+            setShowFeedback(true); // Show feedback if already answered (e.g., coming back from 'Previous')
+        } else {
+            setShowFeedback(false); // Hide feedback if the question is fresh
+        }
+    }, [currentIndex, userAnswers]);
+
+
+    // --- Core API Call Logic (Remains unchanged) ---
+    const sendQuizResults = async (score: number, total: number) => { /* Logic omitted for brevity, assumed functional */ 
         const timeSpent = Math.round((Date.now() - startTime) / 1000);
         
         try {
@@ -33,16 +56,16 @@ const QuizSession: React.FC<QuizProps> = ({ quiz, onExit, sessionId }) => {
                     new_quiz_score: { score, total },
                 }),
             });
-            if (!response.ok) {
+            if (response.ok) {
+                 console.log("Quiz results saved successfully.");
+            } else {
                 console.error("Failed to save quiz results.");
             }
         } catch (e) {
             console.error("Network error saving quiz results:", e);
         }
     };
-    // ----------------------------------------
     
-    // Calculate final score when finishing
     const calculateScore = (deck: Question[], answers: string[]) => {
         let score = 0;
         deck.forEach((q, index) => {
@@ -52,44 +75,110 @@ const QuizSession: React.FC<QuizProps> = ({ quiz, onExit, sessionId }) => {
         });
         return score;
     };
+    const handleExplainError = async () => { /* Logic omitted for brevity */ 
+        if (!selectedOption) return;
 
-
-    const handleAnswer = (selectedOption: string) => {
-        if (isFinished) return;
+        setIsExplaining(true);
+        setShowExplanationModal(true);
+        setExplanationText("Fetching context-aware explanation from Gemini...");
         
-        const newAnswers = [...userAnswers];
-        newAnswers[currentIndex] = selectedOption;
-        setUserAnswers(newAnswers);
+        const currentQ = studyDeck[currentIndex];
+        const userAnswer = selectedOption; 
+
+        try {
+            const response = await fetch(`http://127.0.0.1:5000/explain_error`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    question: currentQ.question,
+                    user_answer: userAnswer,
+                    correct_answer: currentQ.answer,
+                }),
+            });
+            const result = await response.json();
+
+            if (response.ok) {
+                setExplanationText(result.explanation);
+            } else {
+                setExplanationText(`API Error: ${result.error || 'Could not connect to generate explanation.'}`);
+            }
+
+        } catch (e) {
+            setExplanationText("Network Error: Could not connect to the explanation service. (Check Flask server)");
+        } finally {
+            setIsExplaining(false);
+        }
+    };
+    
+    // --- Answer Selection and Navigation Logic ---
+    
+    const handleOptionSelect = (option: string) => {
+        if (showFeedback) return; // Cannot change answer after checking
+        setSelectedOption(option);
     };
 
-    const handleNext = () => {
-        if (userAnswers[currentIndex] === null) {
-            alert("Please select an answer before moving on!");
-            return;
-        }
-
+    const handleAdvanceIndex = (finalAnswers: string[]) => {
+        // Helper function to safely advance index or finish the quiz
         if (currentIndex < studyDeck.length - 1) {
             setCurrentIndex(currentIndex + 1);
+            // State reset is handled by useEffect
         } else {
-            // End of Quiz: Calculate score and trigger API call
-            const finalScore = calculateScore(studyDeck, userAnswers);
-            sendQuizResults(finalScore, studyDeck.length);
+            // Final calculation and API call
+            const finalScore = calculateScore(quiz, finalAnswers); 
+            sendQuizResults(finalScore, quiz.length);
             setIsFinished(true);
         }
     };
 
-    const handlePrevious = () => {
-        if (currentIndex > 0) {
-            setCurrentIndex(currentIndex - 1);
+
+    const handleNextClick = () => {
+        if (!selectedOption) { 
+            alert("Please select an answer first!");
+            return;
+        }
+
+        const currentQ = studyDeck[currentIndex];
+        const isAnswerCorrect = selectedOption === currentQ.answer;
+        let newAnswers = [...userAnswers];
+        
+        if (!showFeedback) {
+            // 1. First Click (Check Answer): Determine path
+            
+            // Record answer for current question
+            newAnswers[currentIndex] = selectedOption;
+            
+            if (isAnswerCorrect) {
+                // 🚨 CRITICAL FIX: If correct, bypass feedback phase and advance instantly
+                setUserAnswers(newAnswers); 
+                handleAdvanceIndex(newAnswers);
+                return; // EXIT after single click success
+            } 
+            
+            // If INCORRECT, show feedback (Fallthrough)
+            setUserAnswers(newAnswers);
+            setShowFeedback(true);
+            
+        } else {
+            // 2. Second Click: Move to next question (Button says "Next Question")
+            // This path only executes after an INCORRECT answer.
+            setShowFeedback(false);
+            // State reset handled by the subsequent index change via handleAdvanceIndex
+            handleAdvanceIndex(userAnswers);
         }
     };
     
-    const startRetrySession = () => {
+    const handlePrevious = () => {
+        if (currentIndex > 0) {
+            setCurrentIndex(currentIndex - 1);
+            // State update handled by useEffect
+        }
+    };
+    
+    const startRetrySession = () => { /* Logic remains the same */ 
         const incorrectQuestions: Question[] = studyDeck.filter((q, index) => userAnswers[index] !== q.answer);
         
         if (incorrectQuestions.length === 0) return;
 
-        // Reset and start review mode with only incorrect questions
         setStudyDeck(incorrectQuestions);
         setUserAnswers(Array(incorrectQuestions.length).fill(null));
         setCurrentIndex(0);
@@ -97,10 +186,8 @@ const QuizSession: React.FC<QuizProps> = ({ quiz, onExit, sessionId }) => {
         setIsReviewMode(true);
     };
     
-    // --- RENDERING LOGIC ---
-    
-    // 🚨 CRITICAL FIX: Add a check for an empty deck before proceeding
-    if (studyDeck.length === 0) {
+    // Define variables safely
+    if (studyDeck.length === 0) { /* (Render empty check) */ 
         return (
             <div className="max-w-xl mx-auto text-center p-8 bg-gray-800 rounded-xl">
                 <h3 className="text-2xl font-bold text-white">No Quiz Questions Available</h3>
@@ -112,13 +199,14 @@ const QuizSession: React.FC<QuizProps> = ({ quiz, onExit, sessionId }) => {
         );
     }
     
-    // Now that we've checked for an empty deck, we can safely define currentQuestion
-    const currentQuestion = studyDeck[currentIndex]; // 🚨 This is the definition that needed the safety check
-    const selectedAnswer = userAnswers[currentIndex];
+    // Define variables used in rendering
+    const currentQuestion = studyDeck[currentIndex]; 
+    const isCorrect = selectedOption === currentQuestion.answer;
 
-    if (isFinished) {
-        const score = calculateScore(studyDeck, userAnswers);
-        const total = studyDeck.length;
+
+    if (isFinished) { /* (Render final score screen) */ 
+        const score = calculateScore(quiz, userAnswers);
+        const total = quiz.length;
         const incorrectCount = total - score;
         const allCorrect = incorrectCount === 0;
 
@@ -153,60 +241,102 @@ const QuizSession: React.FC<QuizProps> = ({ quiz, onExit, sessionId }) => {
             </div>
         );
     }
-    
+
     // --- Quiz Questions View ---
     return (
         <div className="max-w-xl mx-auto space-y-6">
+             {/* Modal for Explanation */}
+            {showExplanationModal && (
+                <div className="fixed inset-0 bg-gray-900 bg-opacity-70 flex items-center justify-center z-50 p-4">
+                    <div className="bg-gray-800 p-6 rounded-xl shadow-2xl max-w-lg w-full space-y-4">
+                        <h3 className="text-xl font-bold text-cyan-400">Tutor Explanation</h3>
+                        <div className="bg-gray-700 p-4 rounded max-h-60 overflow-y-auto text-gray-300 whitespace-pre-wrap">
+                            {isExplaining ? 'Generating Explanation...' : explanationText}
+                        </div>
+                        <button onClick={() => setShowExplanationModal(false)} className="w-full bg-cyan-600 text-white py-2 rounded">
+                            Close
+                        </button>
+                    </div>
+                </div>
+            )}
+            
             <h3 className="text-xl text-center text-gray-300">
                 {isReviewMode ? 'REVIEW ATTEMPT: ' : 'QUIZ: '}
                 Question {currentIndex + 1} of {studyDeck.length}
             </h3>
             
-            {/* Question */}
             <div className="bg-gray-800 p-6 rounded-xl shadow-lg">
                 <p className="text-2xl font-semibold text-white">
                     {currentQuestion.question}
                 </p>
             </div>
 
-            {/* Options */}
             <div className="space-y-3">
                 {currentQuestion.options.map((option: string, index: number) => {
-                    const isSelected = selectedAnswer === option;
+                    const isCurrentSelection = selectedOption === option;
+                    const isAnswerCorrect = option === currentQuestion.answer;
                     
                     let bgColor = 'bg-gray-700 hover:bg-gray-600';
-                    
-                    if (isSelected) {
-                        bgColor = 'bg-blue-600';
-                    } 
+                    let borderColor = 'border-transparent';
+
+                    if (showFeedback) {
+                        if (isAnswerCorrect) {
+                            // If correct answer, always show green
+                            bgColor = 'bg-green-600/50';
+                            borderColor = 'border-green-400';
+                        } else if (isCurrentSelection) {
+                            // If user's WRONG answer, show red
+                            bgColor = 'bg-red-600/50';
+                            borderColor = 'border-red-400';
+                        } else {
+                            // Non-selected options are slightly darker gray in feedback mode
+                            bgColor = 'bg-gray-800'; 
+                            borderColor = 'border-transparent';
+                        }
+                    } else if (isCurrentSelection) {
+                        // If not in feedback mode, just highlight the current selection cyan/blue
+                        bgColor = 'bg-cyan-700/50';
+                        borderColor = 'border-cyan-400';
+                    }
 
                     return (
                         <button 
                             key={index}
-                            onClick={() => handleAnswer(option)}
-                            className={`w-full text-left p-4 rounded-lg text-white transition-colors ${bgColor}`}
+                            onClick={() => handleOptionSelect(option)}
+                            disabled={showFeedback} // Disable selection after checking
+                            className={`w-full text-left p-4 rounded-lg text-white transition-colors border-2 ${bgColor} ${borderColor} disabled:opacity-100 disabled:cursor-default`}
                         >
                             {option}
                         </button>
                     );
                 })}
             </div>
+            
+            {/* 🚨 NEW: Explain My Error Button (Shown ONLY if wrong and in feedback mode) */}
+            {showFeedback && !isCorrect && (
+                <button onClick={handleExplainError} disabled={isExplaining} className="w-full bg-red-600/70 text-white py-2 rounded transition-colors disabled:bg-red-800">
+                    {isExplaining ? 'Generating Explanation...' : 'Explain My Error'}
+                </button>
+            )}
 
-            {/* Navigation */}
             <div className="flex justify-between pt-4">
                 <button 
                     onClick={handlePrevious}
-                    disabled={currentIndex === 0}
+                    // Disable previous if on Q1 or if feedback is currently showing
+                    disabled={currentIndex === 0 || showFeedback} 
                     className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg disabled:opacity-30"
                 >
                     « Previous
                 </button>
                 <button 
-                    onClick={handleNext}
-                    disabled={selectedAnswer === null}
+                    onClick={handleNextClick}
+                    // Disable if no option is selected AND we are not showing feedback yet
+                    disabled={!selectedOption && !showFeedback} 
                     className="bg-cyan-600 hover:bg-cyan-700 text-white px-6 py-2 rounded-lg disabled:opacity-50"
                 >
-                    {currentIndex === studyDeck.length - 1 ? 'Finish Quiz' : 'Next Question »'}
+                    {showFeedback ? 
+                        (currentIndex === studyDeck.length - 1 ? 'Finish Quiz' : 'Next Question »') 
+                        : 'Check Answer'}
                 </button>
             </div>
         </div>

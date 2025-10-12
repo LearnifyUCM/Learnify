@@ -3,7 +3,7 @@ import { useLocation, Link, useNavigate } from "react-router-dom";
 import FlashcardSession from "../components/FlashcardSession";
 import QuizSession from "../components/QuizSession";
 
-// --- INTERFACES (REVISED FOR NULL SAFETY) ---
+// --- INTERFACES ---
 interface SavedSessionMeta {
     id: string; 
     name: string;
@@ -21,9 +21,9 @@ interface QuizScore {
 }
 
 interface ProgressData {
-    total_studied_seconds?: number; // Made optional for safety
-    flashcard_learned_count?: number; // Made optional for safety
-    quiz_history?: QuizScore[]; // CRITICAL: Made optional/can be undefined
+    total_studied_seconds?: number; 
+    flashcard_learned_count?: number; 
+    quiz_history?: QuizScore[]; 
     quiz_attempts?: number;
 }
 
@@ -53,9 +53,12 @@ function Dashboard() {
     
     const [isProcessing, setIsProcessing] = useState(false);
     const [apiError, setApiError] = useState<string | null>(null);
+    
+    // NEW DELETE STATE
+    const [sessionToDelete, setSessionToDelete] = useState<SavedSessionMeta | null>(null);
 
     const BACKEND_URL = 'http://127.0.0.1:5000'; 
-    
+
     // --- API & DATA UTILITIES ---
     
     // 1. Fetch Session Metadata (The list for the dashboard)
@@ -106,7 +109,7 @@ function Dashboard() {
         fetchSessionMetadata();
     }, [fetchSessionMetadata, location.pathname]);
 
-    // 🚨 FIX FOR HEADER LOCKUP: Resets active session state if user clicks header link to dashboard
+    // FIX FOR HEADER LOCKUP: Resets active session state if user clicks header link to dashboard
     useEffect(() => {
         if (location.pathname === '/dashboard' && activeStudyMaterial) {
             if (!location.state) {
@@ -131,7 +134,6 @@ function Dashboard() {
         fetchSpecificMaterial(sessionMeta.id, sessionMeta.name, 'overview');
     };
     
-    // Handler to launch the dedicated Progress View
     const handleViewProgressClick = (sessionMeta: SavedSessionMeta) => {
         fetchSpecificMaterial(sessionMeta.id, sessionMeta.name, 'progress');
     };
@@ -144,11 +146,8 @@ function Dashboard() {
 
     // FIX: This is the handler that resolves the navigational lockup when EXITING a study session
     const handleExitStudy = () => {
-        // 1. Reset the active material state
         setActiveStudyMaterial(null);
-        // 2. Set the mode back to overview
         setCurrentMode('overview'); 
-        // 3. Force a refresh of the list to show new progress percentage
         fetchSessionMetadata();
     };
 
@@ -159,11 +158,44 @@ function Dashboard() {
             setTempSessionName(""); // Clear input on open
         }
     };
+    
+    // NEW DELETE HANDLERS
+    const handleDeleteClicked = (session: SavedSessionMeta) => {
+        setSessionToDelete(session); // Show confirmation modal
+    };
+
+    const handleDeleteConfirmed = async () => {
+        if (!sessionToDelete) return;
+        
+        setIsProcessing(true);
+        setApiError(null);
+
+        try {
+            const response = await fetch(`${BACKEND_URL}/session/${sessionToDelete.id}`, {
+                method: 'DELETE',
+            });
+
+            if (response.ok) {
+                alert(`Session "${sessionToDelete.name}" deleted successfully.`);
+                setSessionToDelete(null); // Clear modal
+                fetchSessionMetadata(); // Refresh the list
+            } else {
+                const errorResult = await response.json();
+                setApiError(errorResult.error || "Failed to delete session.");
+                setSessionToDelete(null); 
+            }
+        } catch (e) {
+            setApiError("Network error: Could not connect to delete service.");
+            setSessionToDelete(null);
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
 
     // Submits the new session name from modal and redirects to Home
     const handleSubmitNewSession = () => {
         if (tempSessionName.trim()) {
-            // Redirect to Home page's file selection screen
             navigate('/', { state: { openModal: true, sessionName: tempSessionName.trim() } });
             setShowCreateModal(false); // Close dashboard modal
         }
@@ -187,62 +219,6 @@ function Dashboard() {
             .join(":");
     };
 
-    // 🚨 FINAL FIX APPLIED HERE 🚨
-    const renderProgressView = () => {
-        // 🚨 CRITICAL FIX: Use optional chaining and default empty arrays/zeroes
-        const progress: ProgressData = activeStudyMaterial?.progress || {};
-        const quizHistory = progress.quiz_history || [];
-        const totalFlashcards = (activeStudyMaterial?.flashcards || []).length;
-        
-        return (
-            <div className="space-y-8 mb-12 max-w-4xl mx-auto">
-                <button onClick={() => setCurrentMode('overview')} className="mb-6 px-4 py-2 bg-gray-700 rounded text-white hover:bg-gray-600">
-                    « Back to Study Actions
-                </button>
-                <h2 className="text-4xl font-bold text-white text-center mb-6">
-                    Progress & Analytics for "{activeSessionName}"
-                </h2>
-
-                {/* Overall Stats Grid */}
-                <div className="grid grid-cols-3 gap-4 text-center">
-                    <div className="p-4 bg-gray-700 rounded-lg">
-                        <p className="text-xl font-bold text-cyan-400">{progress.total_studied_seconds ? formatTime(progress.total_studied_seconds) : "00:00"}</p>
-                        <p className="text-sm text-gray-400">Total Study Time</p>
-                    </div>
-                    <div className="p-4 bg-gray-700 rounded-lg">
-                        <p className="text-xl font-bold text-cyan-400">{progress.flashcard_learned_count || 0} / {totalFlashcards}</p>
-                        <p className="text-sm text-gray-400">Flashcards Mastered</p>
-                    </div>
-                    <div className="p-4 bg-gray-700 rounded-lg">
-                        <p className="text-xl font-bold text-cyan-400">{progress.quiz_attempts || 0}</p>
-                        <p className="text-sm text-gray-400">Quiz Attempts</p>
-                    </div>
-                </div>
-
-                {/* Quiz History */}
-                <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700">
-                    <h3 className="text-2xl font-semibold text-white mb-4">Quiz History</h3>
-                    <div className="space-y-2 max-h-60 overflow-y-auto">
-                        {quizHistory.length === 0 ? (
-                            <p className="text-gray-400">No quizzes attempted yet.</p>
-                        ) : (
-                            quizHistory.slice().reverse().map((attempt, index) => ( // Reverse to show latest first
-                                <div key={index} className="flex justify-between items-center bg-gray-700 p-3 rounded-lg">
-                                    <p className="text-white">Attempt {quizHistory.length - index}</p>
-                                    <p className="text-gray-400 text-sm">{new Date(attempt.timestamp).toLocaleTimeString()}</p>
-                                    <p className={`font-bold ${attempt.score / attempt.total >= 0.8 ? 'text-green-400' : 'text-red-400'}`}>
-                                        {attempt.score} / {attempt.total}
-                                    </p>
-                                </div>
-                            ))
-                        )}
-                    </div>
-                </div>
-            </div>
-        );
-    };
-
-
     // Renders the study options (flashcards/quiz) for the active material
     const renderActiveMaterialView = () => {
         if (!activeStudyMaterial) return null;
@@ -259,9 +235,62 @@ function Dashboard() {
             );
         }
         
-        // 🚨 FIX: RENDER PROGRESS VIEW MODE
+        // RENDER PROGRESS VIEW MODE
         if (currentMode === 'progress') {
-            return renderProgressView();
+            const progress: ProgressData = activeStudyMaterial.progress || {};
+            const quizHistory = progress.quiz_history || [];
+            const totalFlashcards = (activeStudyMaterial.flashcards || []).length;
+            
+            const masteredCount = progress.flashcard_learned_count || 0;
+            const totalStudyTime = progress.total_studied_seconds || 0;
+            const totalQuizAttempts = progress.quiz_attempts || 0;
+
+            return (
+                <div className="space-y-8 mb-12 max-w-4xl mx-auto">
+                    <button onClick={() => setCurrentMode('overview')} className="mb-6 px-4 py-2 bg-gray-700 rounded text-white hover:bg-gray-600">
+                        « Back to Study Actions
+                    </button>
+                    <h2 className="text-4xl font-bold text-white text-center mb-6">
+                        Progress & Analytics for "{activeSessionName}"
+                    </h2>
+
+                    {/* Overall Stats Grid */}
+                    <div className="grid grid-cols-3 gap-4 text-center">
+                        <div className="p-4 bg-gray-700 rounded-lg">
+                            <p className="text-xl font-bold text-cyan-400">{formatTime(totalStudyTime)}</p>
+                            <p className="text-sm text-gray-400">Total Study Time</p>
+                        </div>
+                        <div className="p-4 bg-gray-700 rounded-lg">
+                            <p className="text-xl font-bold text-cyan-400">{masteredCount} / {totalFlashcards}</p>
+                            <p className="text-sm text-gray-400">Flashcards Mastered</p>
+                        </div>
+                        <div className="p-4 bg-gray-700 rounded-lg">
+                            <p className="text-xl font-bold text-cyan-400">{totalQuizAttempts}</p>
+                            <p className="text-sm text-gray-400">Quiz Attempts</p>
+                        </div>
+                    </div>
+
+                    {/* Quiz History */}
+                    <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700">
+                        <h3 className="text-2xl font-semibold text-white mb-4">Quiz History</h3>
+                        <div className="space-y-2 max-h-60 overflow-y-auto">
+                            {quizHistory.length === 0 ? (
+                                <p className="text-gray-400">No quizzes attempted yet.</p>
+                            ) : (
+                                quizHistory.slice().reverse().map((attempt, index) => ( // Reverse to show latest first
+                                    <div key={index} className="flex justify-between items-center bg-gray-700 p-3 rounded-lg">
+                                        <p className="text-white">Attempt {quizHistory.length - index}</p>
+                                        <p className="text-gray-400 text-sm">{new Date(attempt.timestamp).toLocaleTimeString()}</p>
+                                        <p className={`font-bold ${attempt.score / attempt.total >= 0.8 ? 'text-green-400' : 'text-red-400'}`}>
+                                            {attempt.score} / {attempt.total}
+                                        </p>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
         }
 
         const { flashcards, quiz } = activeStudyMaterial;
@@ -346,7 +375,7 @@ function Dashboard() {
                             <div key={session.id} className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-4 transition-all">
                                 
                                 <div className="flex justify-between items-start">
-                                    {/* Session Info */}
+                                    {/* Session Info & Delete Button */}
                                     <div className="flex-1">
                                         <h3 className="font-semibold text-white mb-2">{session.name}</h3>
                                         <p className="text-xs text-gray-400 mb-3">Created {session.created}</p>
@@ -354,6 +383,13 @@ function Dashboard() {
                                     
                                     {/* Action Buttons Group */}
                                     <div className="flex space-x-2 flex-shrink-0">
+                                        {/* 🚨 NEW: Delete Button */}
+                                        <button 
+                                            onClick={() => handleDeleteClicked(session)}
+                                            className="bg-red-700 hover:bg-red-800 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+                                        >
+                                            Delete
+                                        </button>
                                         <button 
                                             onClick={() => handleViewProgressClick(session)}
                                             className="bg-cyan-600/50 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors"
@@ -398,14 +434,42 @@ function Dashboard() {
                         </svg>
                     </div>
                     <span className="text-gray-300 text-sm font-medium">Create New Session</span>
-                </div>
-            </div>
-        </div>
+                </div >
+            </div >
+        </div >
     );
 
     // --- MAIN RENDER ---
     return (
         <div className="min-h-screen w-full relative">
+            {/* 🚨 DELETE CONFIRMATION MODAL */}
+            {sessionToDelete && (
+                <div className="fixed inset-0 bg-gray-900 bg-opacity-70 flex items-center justify-center z-50 p-4">
+                    <div className="bg-gray-800 p-6 rounded-xl shadow-2xl max-w-sm w-full border border-red-700">
+                        <h3 className="text-xl font-bold text-white mb-4">Confirm Deletion</h3>
+                        <p className="text-gray-300 mb-6">
+                            Are you sure you want to permanently delete the study session: **"{sessionToDelete.name}"**?
+                        </p>
+                        
+                        <div className="flex justify-end space-x-4">
+                            <button
+                                onClick={() => setSessionToDelete(null)}
+                                className="px-4 py-2 bg-gray-600 rounded text-white hover:bg-gray-500"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleDeleteConfirmed}
+                                disabled={isProcessing}
+                                className="px-4 py-2 bg-red-700 rounded text-white hover:bg-red-800 disabled:bg-gray-500"
+                            >
+                                {isProcessing ? 'Deleting...' : 'Delete Permanently'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            
             <div className="relative z-10 w-full px-6 lg:px-12 py-8">
                 <div className="max-w-6xl mx-auto">
                     <h1 className="text-4xl font-bold mb-8 text-white text-center">
