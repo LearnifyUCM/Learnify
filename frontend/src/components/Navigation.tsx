@@ -6,6 +6,7 @@ function Navigation() {
   const navItems = [
     { path: '/', label: 'Home' },
     { path: '/dashboard', label: 'Dashboard' },
+    { path: '/planner', label: 'AI Test Planner' },
     { path: '/about', label: 'About' },
   ];
 

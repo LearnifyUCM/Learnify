@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { useLocation, Link, useNavigate } from "react-router-dom"; 
+import { useLocation, useNavigate } from "react-router-dom"; 
 import FlashcardSession from "../components/FlashcardSession";
 import QuizSession from "../components/QuizSession";
 
@@ -27,9 +27,19 @@ interface ProgressData {
     quiz_attempts?: number;
 }
 
+interface TimelineItem {
+    day: number;
+    date: string;
+    topics_to_cover: string;
+    daily_details: string[];
+    estimated_time: string;
+    youtube_search_query: string;
+}
+
 interface StudyMaterial {
     flashcards?: { term: string; definition: string }[];
     quiz?: { question: string; options: string[]; answer: string }[];
+    timeline?: TimelineItem[];
     error?: string;
     progress?: ProgressData; 
 }
@@ -43,7 +53,7 @@ function Dashboard() {
     const newSessionNameFromUpload = location.state?.session_name as string;
 
     // --- State Management ---
-    const [currentMode, setCurrentMode] = useState('overview'); 
+    const [currentMode, setCurrentMode] = useState<'overview' | 'flashcards' | 'quiz' | 'progress' | 'plan'>('overview'); 
     const [sessionsMetadata, setSessionsMetadata] = useState<SavedSessionMeta[]>([]); 
     const [activeStudyMaterial, setActiveStudyMaterial] = useState<StudyMaterial | null>(null); 
     const [activeSessionName, setActiveSessionName] = useState<string>(""); 
@@ -54,14 +64,12 @@ function Dashboard() {
     const [isProcessing, setIsProcessing] = useState(false);
     const [apiError, setApiError] = useState<string | null>(null);
     
-    // NEW DELETE STATE
     const [sessionToDelete, setSessionToDelete] = useState<SavedSessionMeta | null>(null);
 
     const BACKEND_URL = 'http://127.0.0.1:5000'; 
 
     // --- API & DATA UTILITIES ---
     
-    // 1. Fetch Session Metadata (The list for the dashboard)
     const fetchSessionMetadata = useCallback(async () => {
         setIsProcessing(true);
         try {
@@ -79,9 +87,7 @@ function Dashboard() {
         }
     }, [BACKEND_URL]);
 
-
-    // 2. Fetch specific material by ID (used for Study/Progress views)
-    const fetchSpecificMaterial = useCallback(async (sessionId: string, sessionName: string, mode: 'overview' | 'flashcards' | 'quiz' | 'progress') => {
+    const fetchSpecificMaterial = useCallback(async (sessionId: string, sessionName: string) => {
         setIsProcessing(true);
         setApiError(null);
         try {
@@ -91,7 +97,7 @@ function Dashboard() {
             if (response.ok && !material.error) {
                 setActiveStudyMaterial(material);
                 setActiveSessionName(sessionName);
-                setCurrentMode(mode);
+                setCurrentMode(material.timeline ? 'plan' : 'overview');
             } else {
                 setApiError(material.error || "Failed to load session material.");
             }
@@ -104,26 +110,20 @@ function Dashboard() {
 
     // --- EFFECTS ---
 
-    // Load session list when component mounts AND when the URL pathname changes (solves the list refresh bug)
     useEffect(() => {
         fetchSessionMetadata();
     }, [fetchSessionMetadata, location.pathname]);
 
-    // FIX FOR HEADER LOCKUP: Resets active session state if user clicks header link to dashboard
     useEffect(() => {
-        if (location.pathname === '/dashboard' && activeStudyMaterial) {
-            if (!location.state) {
-                setActiveStudyMaterial(null);
-                setCurrentMode('overview');
-            }
+        if (location.pathname === '/dashboard' && !location.state) {
+            setActiveStudyMaterial(null);
+            setCurrentMode('overview');
         }
-    }, [location.pathname]);
+    }, [location.pathname, location.state]);
 
-    // Handle newly uploaded material (if redirected from Home page)
     useEffect(() => {
         if (newSessionIdFromUpload && newSessionNameFromUpload) {
-            fetchSpecificMaterial(newSessionIdFromUpload, newSessionNameFromUpload, 'overview');
-            // Clear location state to prevent re-fetching on refresh
+            fetchSpecificMaterial(newSessionIdFromUpload, newSessionNameFromUpload);
             window.history.replaceState({}, document.title);
         }
     }, [newSessionIdFromUpload, newSessionNameFromUpload, fetchSpecificMaterial]);
@@ -131,20 +131,15 @@ function Dashboard() {
     // --- Handlers ---
 
     const handleStudyNowClick = (sessionMeta: SavedSessionMeta) => {
-        fetchSpecificMaterial(sessionMeta.id, sessionMeta.name, 'overview');
+        fetchSpecificMaterial(sessionMeta.id, sessionMeta.name);
     };
     
     const handleViewProgressClick = (sessionMeta: SavedSessionMeta) => {
-        fetchSpecificMaterial(sessionMeta.id, sessionMeta.name, 'progress');
+        fetchSpecificMaterial(sessionMeta.id, sessionMeta.name).then(() => {
+            setCurrentMode('progress');
+        });
     };
 
-
-    const startStudy = (material: StudyMaterial, mode: 'flashcards' | 'quiz') => {
-        setActiveStudyMaterial(material);
-        setCurrentMode(mode);
-    };
-
-    // FIX: This is the handler that resolves the navigational lockup when EXITING a study session
     const handleExitStudy = () => {
         setActiveStudyMaterial(null);
         setCurrentMode('overview'); 
@@ -155,13 +150,12 @@ function Dashboard() {
         if (!isProcessing) {
             setShowCreateModal(true);
             setApiError(null);
-            setTempSessionName(""); // Clear input on open
+            setTempSessionName("");
         }
     };
     
-    // NEW DELETE HANDLERS
     const handleDeleteClicked = (session: SavedSessionMeta) => {
-        setSessionToDelete(session); // Show confirmation modal
+        setSessionToDelete(session);
     };
 
     const handleDeleteConfirmed = async () => {
@@ -176,8 +170,7 @@ function Dashboard() {
             });
 
             if (response.ok) {
-                alert(`Session "${sessionToDelete.name}" deleted successfully.`);
-                setSessionToDelete(null); // Clear modal
+                setSessionToDelete(null);
                 fetchSessionMetadata(); // Refresh the list
             } else {
                 const errorResult = await response.json();
@@ -192,12 +185,10 @@ function Dashboard() {
         }
     };
 
-
-    // Submits the new session name from modal and redirects to Home
     const handleSubmitNewSession = () => {
         if (tempSessionName.trim()) {
             navigate('/', { state: { openModal: true, sessionName: tempSessionName.trim() } });
-            setShowCreateModal(false); // Close dashboard modal
+            setShowCreateModal(false);
         }
     };
 
@@ -208,7 +199,6 @@ function Dashboard() {
 
     // --- RENDER LOGIC COMPONENTS ---
     
-    // Utility to convert seconds to HH:MM:SS format
     const formatTime = (seconds: number) => {
         const h = Math.floor(seconds / 3600);
         const m = Math.floor((seconds % 3600) / 60);
@@ -219,7 +209,6 @@ function Dashboard() {
             .join(":");
     };
 
-    // Renders the study options (flashcards/quiz) for the active material
     const renderActiveMaterialView = () => {
         if (!activeStudyMaterial) return null;
 
@@ -235,7 +224,88 @@ function Dashboard() {
             );
         }
         
-        // RENDER PROGRESS VIEW MODE
+        const currentSessionMeta = sessionsMetadata.find(s => s.name === activeSessionName);
+        const sessionId = currentSessionMeta?.id || 'unknown';
+
+        if (currentMode === 'flashcards' && activeStudyMaterial.flashcards) {
+            return <FlashcardSession flashcards={activeStudyMaterial.flashcards} onExit={handleExitStudy} sessionId={sessionId} />;
+        }
+        if (currentMode === 'quiz' && activeStudyMaterial.quiz) {
+            return <QuizSession quiz={activeStudyMaterial.quiz} onExit={handleExitStudy} sessionId={sessionId} />;
+        }
+        
+        if (currentMode === 'plan' && activeStudyMaterial.timeline) {
+            const { timeline, flashcards, quiz } = activeStudyMaterial;
+            return (
+                <div className="space-y-8 mb-12">
+                     <h2 className="text-3xl font-bold text-cyan-400 text-center">
+                        Your AI-Generated Study Plan for "{activeSessionName}"
+                    </h2>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-gray-800 bg-opacity-70 p-6 rounded-2xl border border-gray-700">
+                         <div>
+                            <h3 className="text-2xl font-semibold mb-2 text-white">Study Materials</h3>
+                            <p className="text-gray-300 mb-4">
+                                Use the generated flashcards and quizzes to master the topics in your plan.
+                            </p>
+                        </div>
+                        <div className="flex flex-col md:flex-row gap-4 items-center justify-center">
+                            <button 
+                                onClick={() => setCurrentMode('flashcards')}
+                                className="w-full md:w-auto flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 px-6 rounded-lg font-medium transition-colors"
+                            >
+                                Flashcards ({(flashcards || []).length})
+                            </button>
+                            <button 
+                                onClick={() => setCurrentMode('quiz')}
+                                className="w-full md:w-auto flex-1 bg-green-600 hover:bg-green-700 text-white py-3 px-6 rounded-lg font-medium transition-colors"
+                            >
+                                Quiz ({(quiz || []).length})
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="space-y-4">
+                        {timeline.map((item) => (
+                            <div key={item.day} className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-6">
+                                <div className="flex flex-col md:flex-row justify-between md:items-start">
+                                    <div className="flex-1 mb-4 md:mb-0 md:pr-6">
+                                        <p className="text-sm text-cyan-400 font-semibold">Day {item.day} - {new Date(item.date + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</p>
+                                        <h4 className="text-xl font-bold text-white mt-1">{item.topics_to_cover}</h4>
+                                        <ul className="list-disc list-inside text-sm text-gray-300 mt-2 space-y-1">
+                                            {item.daily_details.map((detail, index) => (
+                                                <li key={index}>{detail}</li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                    <div className="flex items-center gap-6 flex-shrink-0">
+                                        <div className="text-right">
+                                            <p className="text-sm text-gray-400">Est. Time</p>
+                                            <p className="text-white font-semibold">{item.estimated_time}</p>
+                                        </div>
+                                        <a 
+                                            href={`https://www.youtube.com/results?search_query=${encodeURIComponent(item.youtube_search_query)}`}
+                                            target="_blank" 
+                                            rel="noopener noreferrer"
+                                            className="bg-red-600 hover:bg-red-700 text-white px-4 py-3 rounded-lg flex items-center gap-2"
+                                            title="Search for this topic on YouTube"
+                                        >
+                                           <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" /></svg>
+                                            <span>Video</span>
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    <button onClick={handleExitStudy} className="mt-8 px-6 py-3 bg-gray-700 rounded-lg text-white hover:bg-gray-600">
+                        Return to Session List
+                    </button>
+                </div>
+            )
+        }
+        
         if (currentMode === 'progress') {
             const progress: ProgressData = activeStudyMaterial.progress || {};
             const quizHistory = progress.quiz_history || [];
@@ -247,15 +317,14 @@ function Dashboard() {
 
             return (
                 <div className="space-y-8 mb-12 max-w-4xl mx-auto">
-                    <button onClick={() => setCurrentMode('overview')} className="mb-6 px-4 py-2 bg-gray-700 rounded text-white hover:bg-gray-600">
-                        « Back to Study Actions
+                    <button onClick={() => setCurrentMode(activeStudyMaterial.timeline ? 'plan' : 'overview')} className="mb-6 px-4 py-2 bg-gray-700 rounded text-white hover:bg-gray-600">
+                        « Back to Actions
                     </button>
                     <h2 className="text-4xl font-bold text-white text-center mb-6">
                         Progress & Analytics for "{activeSessionName}"
                     </h2>
 
-                    {/* Overall Stats Grid */}
-                    <div className="grid grid-cols-3 gap-4 text-center">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
                         <div className="p-4 bg-gray-700 rounded-lg">
                             <p className="text-xl font-bold text-cyan-400">{formatTime(totalStudyTime)}</p>
                             <p className="text-sm text-gray-400">Total Study Time</p>
@@ -270,14 +339,13 @@ function Dashboard() {
                         </div>
                     </div>
 
-                    {/* Quiz History */}
                     <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700">
                         <h3 className="text-2xl font-semibold text-white mb-4">Quiz History</h3>
                         <div className="space-y-2 max-h-60 overflow-y-auto">
                             {quizHistory.length === 0 ? (
                                 <p className="text-gray-400">No quizzes attempted yet.</p>
                             ) : (
-                                quizHistory.slice().reverse().map((attempt, index) => ( // Reverse to show latest first
+                                quizHistory.slice().reverse().map((attempt, index) => (
                                     <div key={index} className="flex justify-between items-center bg-gray-700 p-3 rounded-lg">
                                         <p className="text-white">Attempt {quizHistory.length - index}</p>
                                         <p className="text-gray-400 text-sm">{new Date(attempt.timestamp).toLocaleTimeString()}</p>
@@ -293,51 +361,33 @@ function Dashboard() {
             );
         }
 
-        const { flashcards, quiz } = activeStudyMaterial;
-        const currentSessionMeta = sessionsMetadata.find(s => s.name === activeSessionName);
-        const sessionId = currentSessionMeta?.id || 'unknown'; 
-
-        // RENDER INTERACTIVE SESSION
-        if (currentMode === 'flashcards') {
-            return <FlashcardSession flashcards={flashcards || []} onExit={handleExitStudy} sessionId={sessionId} />;
-        }
-        if (currentMode === 'quiz') {
-            return <QuizSession quiz={quiz || []} onExit={handleExitStudy} sessionId={sessionId} />;
-        }
-
-        // Default: Overview Mode
         return (
             <div className="space-y-8 mb-12">
                 <h2 className="text-3xl font-bold text-cyan-400 text-center">
                     Study Actions for "{activeSessionName}"
                 </h2>
 
-                <div className="grid grid-cols-3 gap-8">
-                    {/* Flashcards Overview Block */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                     <div className="bg-gray-800 bg-opacity-70 rounded-2xl p-6 border border-gray-700">
-                        <h3 className="text-2xl font-semibold mb-4 text-white">Flashcards ({(flashcards || []).length})</h3>
+                        <h3 className="text-2xl font-semibold mb-4 text-white">Flashcards ({(activeStudyMaterial.flashcards || []).length})</h3>
                         <p className="text-gray-300 mb-6">Review key terms and definitions.</p>
                         <button 
-                            onClick={() => startStudy(activeStudyMaterial, 'flashcards')}
+                            onClick={() => setCurrentMode('flashcards')}
                             className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-medium transition-colors"
                         >
                             Start Flashcard Session
                         </button>
                     </div>
-
-                    {/* Quiz Overview Block */}
                     <div className="bg-gray-800 bg-opacity-70 rounded-2xl p-6 border border-gray-700">
-                        <h3 className="text-2xl font-semibold mb-4 text-white">Quiz ({(quiz || []).length})</h3>
+                        <h3 className="text-2xl font-semibold mb-4 text-white">Quiz ({(activeStudyMaterial.quiz || []).length})</h3>
                         <p className="text-gray-300 mb-6">Test your knowledge with multiple-choice questions.</p>
                         <button 
-                            onClick={() => startStudy(activeStudyMaterial, 'quiz')}
+                            onClick={() => setCurrentMode('quiz')}
                             className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg font-medium transition-colors"
                         >
                             Take Quiz Session
                         </button>
                     </div>
-                    
-                    {/* View Progress Block */}
                     <div className="bg-gray-800 bg-opacity-70 rounded-2xl p-6 border border-gray-700">
                         <h3 className="text-2xl font-semibold mb-4 text-white">Analytics</h3>
                         <p className="text-gray-300 mb-6">Track your progress and quiz history.</p>
@@ -357,7 +407,6 @@ function Dashboard() {
         );
     };
 
-    // Renders the list of all saved study sessions
     const renderSessionList = () => (
         <div className="bg-gray-800 bg-opacity-50 backdrop-blur-lg rounded-2xl p-6 border border-gray-700">
             <h2 className="text-2xl font-semibold mb-6 text-white">
@@ -371,19 +420,16 @@ function Dashboard() {
                     sessionsMetadata.length === 0 ? (
                         <p className="text-gray-400 text-center py-4">No study sessions yet. Create one!</p>
                     ) : (
-                        sessionsMetadata.map((session, index) => (
+                        sessionsMetadata.map((session) => (
                             <div key={session.id} className="bg-gray-700 bg-opacity-50 border border-gray-600 rounded-xl p-4 transition-all">
                                 
                                 <div className="flex justify-between items-start">
-                                    {/* Session Info & Delete Button */}
                                     <div className="flex-1">
                                         <h3 className="font-semibold text-white mb-2">{session.name}</h3>
                                         <p className="text-xs text-gray-400 mb-3">Created {session.created}</p>
                                     </div>
                                     
-                                    {/* Action Buttons Group */}
                                     <div className="flex space-x-2 flex-shrink-0">
-                                        {/* 🚨 NEW: Delete Button */}
                                         <button 
                                             onClick={() => handleDeleteClicked(session)}
                                             className="bg-red-700 hover:bg-red-800 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors"
@@ -405,10 +451,9 @@ function Dashboard() {
                                     </div>
                                 </div>
 
-                                {/* Progress Bar and Stats */}
                                 <div className="mt-4 pt-3 border-t border-gray-600">
                                     <p className="text-xs text-gray-400 mb-1">
-                                        Progress: **{session.progress_percent}% mastered** | {session.quiz_attempts} quiz attempt{session.quiz_attempts !== 1 ? 's' : ''}
+                                        Progress: {session.progress_percent}% mastered | {session.quiz_attempts} quiz attempt{session.quiz_attempts !== 1 ? 's' : ''}
                                     </p>
                                     <div className="w-full bg-gray-500 rounded-full h-2.5">
                                         <div 
@@ -423,7 +468,6 @@ function Dashboard() {
                     )
                 )}
 
-                {/* Create New Session button */}
                 <div
                     onClick={handleCreateNewSession}
                     className="border-2 border-dashed border-gray-500 rounded-xl p-6 flex flex-col items-center justify-center hover:border-cyan-400 transition-colors cursor-pointer"
@@ -439,16 +483,14 @@ function Dashboard() {
         </div >
     );
 
-    // --- MAIN RENDER ---
     return (
         <div className="min-h-screen w-full relative">
-            {/* 🚨 DELETE CONFIRMATION MODAL */}
             {sessionToDelete && (
                 <div className="fixed inset-0 bg-gray-900 bg-opacity-70 flex items-center justify-center z-50 p-4">
                     <div className="bg-gray-800 p-6 rounded-xl shadow-2xl max-w-sm w-full border border-red-700">
                         <h3 className="text-xl font-bold text-white mb-4">Confirm Deletion</h3>
                         <p className="text-gray-300 mb-6">
-                            Are you sure you want to permanently delete the study session: **"{sessionToDelete.name}"**?
+                            Are you sure you want to permanently delete the study session: "{sessionToDelete.name}"?
                         </p>
                         
                         <div className="flex justify-end space-x-4">
@@ -473,22 +515,19 @@ function Dashboard() {
             <div className="relative z-10 w-full px-6 lg:px-12 py-8">
                 <div className="max-w-6xl mx-auto">
                     <h1 className="text-4xl font-bold mb-8 text-white text-center">
-                        {activeStudyMaterial ? `Material: ${activeSessionName}` : 'Study Dashboard'}
+                        {activeStudyMaterial ? `Session: ${activeSessionName}` : 'Study Dashboard'}
                     </h1>
 
-                    {/* Error message display is crucial here */}
                     {apiError && (
                         <div className="text-center py-4 bg-red-800 text-white rounded-xl mb-4">
                             API Error: {apiError}
                         </div>
                     )}
 
-                    {/* Conditional rendering based on active study session */}
                     {activeStudyMaterial ? renderActiveMaterialView() : renderSessionList()}
                 </div>
             </div>
 
-            {/* Create New Session Modal */}
             {showCreateModal && (
                 <div className="fixed inset-0 bg-gray-900 bg-opacity-30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
                     <div className="bg-gray-800 bg-opacity-95 backdrop-blur-lg rounded-2xl shadow-2xl max-w-sm w-full border border-gray-700">
